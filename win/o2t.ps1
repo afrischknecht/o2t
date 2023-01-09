@@ -1,3 +1,6 @@
+Set-Variable -Name AdoptiumAPI -Option Constant -Value 'https://api.adoptium.net'
+
+
 function Test-CommandOnPath {
     Param ($command)
     $currentPref = $ErrorActionPreference
@@ -91,40 +94,9 @@ function Uninstall-InstalledSoftware {
     )            
 
     try {
-        $returnval = ([WMICLASS]"\\$computerName\ROOT\CIMV2:win32_process").Create("msiexec `/x$AppGUID `/norestart `/qn")
-    }
-    catch {
-        write-error "Failed to trigger the uninstallation. Review the error message"
-        $_
-        exit
-    }
-    switch ($($returnval.returnvalue)) {
-        0 { "Uninstallation command triggered successfully" }
-        2 { "You don't have sufficient permissions to trigger the command on $Computer" }
-        3 { "You don't have sufficient permissions to trigger the command on $Computer" }
-        8 { "An unknown error has occurred" }
-        9 { "Path Not Found" }
-        9 { "Invalid Parameter" }
-    }
-}
-
-function Uninstall-InstalledSoftware2 {
-    Param (            
-        [parameter(ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
-        [string]$ComputerName = $env:computername,
-        [parameter(ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, Mandatory = $true)]
-        [string]$AppGUID
-    )            
-
-    try {
         $proc = Start-Process -Verb RunAs -PassThru -FilePath 'msiexec' -ArgumentList "/x$AppGUID", '/norestart', '/qn'
         $proc.WaitForExit()
         return $proc.ExitCode
-    }
-    catch {
-        write-error "Failed to trigger uninstall. Exiting."
-        $_
-        exit
     }
     finally {
         if ($proc) {
@@ -132,6 +104,19 @@ function Uninstall-InstalledSoftware2 {
             $proc.Dispose()
         }
     }
+}
+
+$InstalledSoftware = $null
+function Get-JavaInstallations {
+    # Since enumerating every installed application is somewhat expensive, we want to avoid calls to 'Get-InstalledSoftware' as much as possible
+    if (-not $InstalledSoftware) {
+        $InstalledSoftware = Get-InstalledSoftware
+    }
+
+    $oracle = $InstalledSoftware | Where-Object { $_.AppVendor -and $_.AppVendor.Contains('Oracle') -and $_.InstallLocation -and $_.AppName -and $_.AppName.Contains('Java') }
+    $openjdks = $InstalledSoftware | Where-Object { $_.AppVendor -and ($_.AppVendor.Contains('Amazon') -or $_.AppVendor.Contains('Eclipse')) -and $_.AppName -and ($_.AppName.Contains('Temurin') -or $_.AppName.Contains('Corretto')) }
+
+    return $oracle, $openjdks
 }
 
 function Get-TemurinInstaller {
@@ -143,7 +128,7 @@ function Get-TemurinInstaller {
         [string] $TmpDir
     )
 
-    $url = "https://api.adoptium.net/v3/installer/latest/${FeatureVersion}/ga/windows/x64/${Flavor}/hotspot/normal/eclipse"
+    $url = "${AdoptiumAPI}/v3/installer/latest/${FeatureVersion}/ga/windows/x64/${Flavor}/hotspot/normal/eclipse"
     $fileName = "temurin-${Flavor}-${FeatureVersion}.msi"
     $outFile = [System.IO.Path]::Combine($TmpDir, $fileName)
     
@@ -173,7 +158,7 @@ function Get-JavaVersion {
         [string] $Exe
     )
     if ([System.IO.File]::Exists($Exe) -or $(Test-CommandOnPath $Exe)) {
-        $m = & $Exe -version 2>&1 | Select-Object -First 1 | Select-String -Pattern '([0-9][.]){2,}[^"]+'
+        $m = & $Exe -version 2>&1 | Select-Object -First 1 | Select-String -Pattern '([0-9]+[.]){2,}[^"]+'
         $m.Matches.Value
     }
     else {
@@ -187,7 +172,12 @@ function Get-JavaFeatureVersion {
         [string] $FullVersion
     )
 
-    $FullVersion.Split('.')[1]
+    $components = $FullVersion.Split('.')
+    if ([int]($components[0]) -eq 1) { # Java 8 or older
+        $components[1]
+    } else {
+        $components[0]
+    }
 }
 
 function Get-JavaHomeVar {
@@ -206,6 +196,13 @@ function Get-JavaHomeVar {
         $rv | Add-Member -MemberType NoteProperty -Name VariableStore -Value 'User'
         $rv | Add-Member -MemberType NoteProperty -Name Value -Value $userVars['JAVA_HOME']
     }
+
+    if (-not $userVars.ContainsKey('JAVA_HOME') -and -not $systemVars.ContainsKey('JAVA_HOME')) {
+        $rv | Add-Member -MemberType NoteProperty -Name VariableStore -Value $null
+        $rv | Add-Member -MemberType NoteProperty -Name Value -Value $null
+    }
+
+    $rv
 }
 
 function Test-DefaultIsJRE {
@@ -251,23 +248,227 @@ function Test-IsJDK {
     [System.IO.File]::Exists($compiler) -and [System.IO.File]::Exists($runtime)
 }
 
-function Test-IsAdmin {
+function Test-IsOpenJDK {
+    Param(
+        [string] $Exe
+    )
+    if ([System.IO.File]::Exists($Exe) -or $(Test-CommandOnPath $Exe)) {
+        & $Exe -version 2>&1 | Select-String -SimpleMatch 'OpenJDK' -Quiet
+    }
+    else {
+        throw "$Exe does not seem to exist!"
+    }
+}
+
+function Test-Elevated {
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
+
+function Test-IsInLocalAdmins {
+    whoami /groups | Select-String -SimpleMatch 'S-1-5-32-544' -Quiet
+}
+
+function Write-Title {
+    Param(
+        [string] $Message
+    )
+
+    Write-Host -ForegroundColor Cyan "<< $Message >>"
+    Write-Host ''
+}
+
+function Write-Subtitle {
+    Param(
+        [string] $Title,
+        [string] $Message
+    )
+
+    Write-Host -NoNewline "${Title}: "
+    Write-Host -ForegroundColor DarkGray $Message
+}
+
+function Receive-Answer {
+    Param(
+        [string] $Question
+    )
+
+    $answer = $null
+    while (-not $answer) {
+        $answer = Read-Host -Prompt "${Question} [y/n]"
+        if ($answer.ToLowerInvariant() -ne 'y' -and $answer.ToLowerInvariant() -ne 'n') {
+            Write-Host -ForegroundColor DarkGray "Please just answer with either 'y' or 'n'."
+            $answer = $null
+        } else {
+            return $answer -eq 'y'
+        }
+    }
+
+}
+
+function _dealWithJDKs {
+     # JDKs
+     Write-Title 'Java Development Kits (JDKs)'
+     Write-Subtitle 'OpenJDK' 'Looking for OpenJDK installations on the system.'
+ 
+     Write-Subtitle 'Oracle JDKs' 'Looking for Oracle JDK installations on the system.'
+}
+
+function _dealWithJRE {
+    # JRE
+    Write-Title 'Java Runtime Environment (JRE)'
+    Write-Subtitle 'Oracle JRE' 'Looking for an installation of Oracle JRE on the system.'
+}
+
+#region pre-checks
+function _precheckConnectivity {
+    Write-Subtitle 'Connectivity' "Trying to reach the Adoptium API at ${AdoptiumAPI}"
+    if (Test-CanConnect) {
+        Write-Host -ForegroundColor Green "Excellent! Adoptium API is responding!`r`n"
+    } else {
+        Write-Host -ForegroundColor Red 'Failed to connect!'
+        Write-Host ''
+        Write-Host -ForegroundColor Yellow @"
+Trying to connect to ${AdoptiumAPI} resulted in an error. This script requires an active Internet connection to proceed.
+Please verify that your machine is connected to the Internet and that ${AdoptiumAPI} can be reached.
+"@
+        Write-Host ''
+        Write-Host 'Exiting now!'
+        exit
+    }
+}
+
+function _precheckShellElevation {
+    Write-Subtitle 'Admin Rights' 'Checking if we are running in an elevated shell.'
+    if (Test-Elevated) {
+        Write-Host -ForegroundColor Green "Swell! It looks like we are running in an elevated command prompt!`r`n"
+    } elseif (Test-IsInLocalAdmins) {
+        Write-Host -ForegroundColor DarkGreen @"
+Great! It looks like your account is a local admin. It is possible that you will see a bunch of UAC prompts along the way.
+If you don't feel like clicking, consider re-running this script in an elevated PowerShell prompt.
+
+"@
+    } else {
+        Write-Host -ForegroundColor Yellow @"
+Warning! Could not determine if your account has local admin rights. It is possible that you do if e.g. your account
+inherits the right indirectly via AD group membership. However determining this is beyond the capabilities of this
+little script.
+
+To make everything crystal clear, it is recommended to stop now and re-run the script in an elevated PowerShell prompt.
+
+"@
+        if (Receive-Answer 'Do you want to stop now?') {
+            Write-Host 'Okay. See you later!'
+            exit
+        } else {
+            Write-Host "Fine. We'll continue. But if I fail it is on you!`r`n"
+        }
+    }
+}
+
+function _precheckDefaultJava {
+    Write-Subtitle 'Default Installation' 'Looking for a default Java installation and checking JAVA_HOME.'
+
+    $ver = Get-JavaVersion 'java.exe'
+    if ($ver -ne '0.0.0') {
+        $featureVer = Get-JavaFeatureVersion $ver
+        Write-Host "‣ It looks like at least one version of Java is installed: $(if (Test-IsOpenJDK 'java.exe ') { 'OpenJDK' } else { 'Oracle' }) Java ${featureVer} ($ver)"
+    } else {
+        Write-Host "‣ Could not find a default Java installation."
+    }
+
+    $jhome = Get-JavaHomeVar
+    if ($jhome.VariableStore) {
+        Write-Host "‣ It looks like the environment variable JAVA_HOME is set and it is pointing to $($jhome.Value)"
+    } else {
+        Write-Host '‣ It seems that the environment variable JAVA_HOME is not set.'
+    }
+
+    Write-Host ''
+}
+
+function _prechecks {
+    Write-Title 'Initial Checks'
+    _precheckDefaultJava
+    _precheckShellElevation
+    _precheckConnectivity
+}
+
+function Test-CanConnect {
+    curl.exe -s -I -o $null -f $AdoptiumAPI
+    return $?
+}
+#endregion
+
+
+try {
+    $tdir = New-TempDir
+    _prechecks
+    _dealWithJRE
+    _dealWithJDKs
+}
+finally {
+    Write-Host 'Cleaning up!'
+    if ($tdir) {
+        Remove-Item -Recurse -Force $tdir
+    }
+}
+
+
 
 #$tdir = New-TempDir
 #$msi = Get-TemurinInstaller -FeatureVersion 11 -TmpDir $tdir
 #Install-Temurin -MsiInstaller $msi
 
 # Get-JavaVersion 'java.exe' | Get-JavaFeatureVersion
-$installs = Get-InstalledSoftware | Where-Object { $_.AppVendor -and $_.AppVendor.StartsWith('Oracle') -and $_.InstallLocation }
-foreach ($install in $installs) {
-    $path = "$($install.InstallLocation)bin\java.exe"
-    Write-Host "Path is: $path"
-    Write-Host "Is JDK? $($install | Test-IsJDK)"
-    Write-Host "Full version is $(Get-JavaVersion $path)"
-    Write-Host "Major version is $(Get-JavaVersion $path | Get-JavaFeatureVersion)"
-}
+#$installs = Get-InstalledSoftware | Where-Object { $_.AppVendor -and $_.AppVendor.StartsWith('Oracle') -and $_.InstallLocation }
+#foreach ($install in $installs) {
+#    $path = "$($install.InstallLocation)bin\java.exe"
+#    Write-Host "Path is: $path"
+#    Write-Host "Is JDK? $($install | Test-IsJDK)"
+#    Write-Host "Full version is $(Get-JavaVersion $path)"
+#    Write-Host "Feature version is $(Get-JavaVersion $path | Get-JavaFeatureVersion)"
+#    if (Test-IsJDK $install.InstallLocation) {
+#        $comp = "$($install.InstallLocation)bin\javac.exe"
+#        Write-Host "Compiler version is $(Get-JavaVersion $comp)"
+#    }
+#}
 
-Get-JavaVersion 'java.exe'
+# $prop, $open = Get-JavaInstallations
+
+# foreach ($install in $prop) {
+#     $path = "$($install.InstallLocation)bin\java.exe"
+#     Write-Host "Oracle Java"
+#     Write-Host "Path is: $path"
+#     Write-Host "Is JDK? $($install | Test-IsJDK)"
+#     Write-Host "Full version is $(Get-JavaVersion $path)"
+#     Write-Host "Feature version is $(Get-JavaVersion $path | Get-JavaFeatureVersion)"
+#     if (Test-IsJDK $install.InstallLocation) {
+#         $comp = "$($install.InstallLocation)bin\javac.exe"
+#         Write-Host "Compiler version is $(Get-JavaVersion $comp)"
+#     }
+# }
+
+# foreach ($install in $open) {
+#     if ($install.InstallLocation) {
+#         # Anoyingly, Corretto doesn't register the install location.
+#         $path = "$($install.InstallLocation)bin\java.exe"
+#         Write-Host "OpenJDK Java"
+#         Write-Host "Path is: $path"
+#         Write-Host "Is JDK? $($install | Test-IsJDK)"
+#         Write-Host "Full version is $(Get-JavaVersion $path)"
+#         Write-Host "Feature version is $(Get-JavaVersion $path | Get-JavaFeatureVersion)"
+#         if (Test-IsJDK $install.InstallLocation) {
+#             $comp = "$($install.InstallLocation)bin\javac.exe"
+#             Write-Host "Compiler version is $(Get-JavaVersion $comp)"
+#         }   
+#     } else {
+#         Write-Host "Amazon Corretto"
+#         Write-Host "Path is not known..."
+#         Write-Host "Is JDK? Likely..."
+#         Write-Host "Full version is $($install.AppVersion)"
+#         Write-Host "Feature version is $($install.AppVersion | Get-JavaFeatureVersion)"
+#     }
+# }
+
+
