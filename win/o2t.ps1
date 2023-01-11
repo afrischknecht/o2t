@@ -19,12 +19,12 @@ function Test-CommandOnPath {
 }
 
 function Get-Arch {
-    [CmdletBinding(DefaultParameterSetName="None")]
+    [CmdletBinding(DefaultParameterSetName = "None")]
     PARAM(
-    	[ValidateNotNullOrEmpty()]
-    	[ValidateScript({Test-Path $_})]
-    	[string]
-    	$Path
+        [ValidateNotNullOrEmpty()]
+        [ValidateScript({ Test-Path $_ })]
+        [string]
+        $Path
     )
     
     BEGIN {
@@ -38,55 +38,57 @@ function Get-Arch {
     
     PROCESS {
         # Create a location to place the byte data
-        [byte[]]$BYTE_ARRAY = New-Object -TypeName System.Byte[] -ArgumentList @(,$PE_HEADER_SIZE)
+        [byte[]]$BYTE_ARRAY = New-Object -TypeName System.Byte[] -ArgumentList @(, $PE_HEADER_SIZE)
         # Open the file for read access
         try {
             $FileStream = New-Object -TypeName System.IO.FileStream -ArgumentList ($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read)
             # Read the requested byte length into the byte array
             $FileStream.Read($BYTE_ARRAY, 0, $BYTE_ARRAY.Length) | Out-Null
-        } finally {
+        }
+        finally {
             $FileStream.Close()
             $FileStream.Dispose()
         }
         #
         [int32]$PE_HEADER_ADDR = [System.BitConverter]::ToInt32($BYTE_ARRAY, $PE_POINTER_OFFSET)
         try {
-    	    [int32]$machineUint = [System.BitConverter]::ToUInt16($BYTE_ARRAY, $PE_HEADER_ADDR + $MACHINE_OFFSET)
-        } catch {
-    	    $machineUint = 0xffff
+            [int32]$machineUint = [System.BitConverter]::ToUInt16($BYTE_ARRAY, $PE_HEADER_ADDR + $MACHINE_OFFSET)
+        }
+        catch {
+            $machineUint = 0xffff
         }
         switch ($machineUint) {
-    	    0x0000 {return 'UNKNOWN'}
-    	    0x0184 {return 'ALPHA'}
-    	    0x01d3 {return 'AM33'}
-    	    0x8664 {return 'AMD64'}
-    	    0x01c0 {return 'ARM'}
-    	    0x01c4 {return 'ARMNT'} # aka ARMV7
-    	    0xaa64 {return 'ARM64'} # aka ARMV8
-    	    0x0ebc {return 'EBC'}
-    	    0x014c {return 'I386'}
-    	    0x014d {return 'I860'}
-    	    0x0200 {return 'IA64'}
-    	    0x0268 {return 'M68K'}
-    	    0x9041 {return 'M32R'}
-    	    0x0266 {return 'MIPS16'}
-    	    0x0366 {return 'MIPSFPU'}
-    	    0x0466 {return 'MIPSFPU16'}
-    	    0x01f0 {return 'POWERPC'}
-    	    0x01f1 {return 'POWERPCFP'}
-    	    0x01f2 {return 'POWERPCBE'}
-    	    0x0162 {return 'R3000'}
-    	    0x0166 {return 'R4000'}
-    	    0x0168 {return 'R10000'}
-    	    0x01a2 {return 'SH3'}
-    	    0x01a3 {return 'SH3DSP'}
-    	    0x01a6 {return 'SH4'}
-    	    0x01a8 {return 'SH5'}
-    	    0x0520 {return 'TRICORE'}
-    	    0x01c2 {return 'THUMB'}
-    	    0x0169 {return 'WCEMIPSV2'}
-    	    0x0284 {return 'ALPHA64'}
-    	    0xffff {return 'INVALID'}
+            0x0000 { return 'UNKNOWN' }
+            0x0184 { return 'ALPHA' }
+            0x01d3 { return 'AM33' }
+            0x8664 { return 'AMD64' }
+            0x01c0 { return 'ARM' }
+            0x01c4 { return 'ARMNT' } # aka ARMV7
+            0xaa64 { return 'ARM64' } # aka ARMV8
+            0x0ebc { return 'EBC' }
+            0x014c { return 'I386' }
+            0x014d { return 'I860' }
+            0x0200 { return 'IA64' }
+            0x0268 { return 'M68K' }
+            0x9041 { return 'M32R' }
+            0x0266 { return 'MIPS16' }
+            0x0366 { return 'MIPSFPU' }
+            0x0466 { return 'MIPSFPU16' }
+            0x01f0 { return 'POWERPC' }
+            0x01f1 { return 'POWERPCFP' }
+            0x01f2 { return 'POWERPCBE' }
+            0x0162 { return 'R3000' }
+            0x0166 { return 'R4000' }
+            0x0168 { return 'R10000' }
+            0x01a2 { return 'SH3' }
+            0x01a3 { return 'SH3DSP' }
+            0x01a6 { return 'SH4' }
+            0x01a8 { return 'SH5' }
+            0x0520 { return 'TRICORE' }
+            0x01c2 { return 'THUMB' }
+            0x0169 { return 'WCEMIPSV2' }
+            0x0284 { return 'ALPHA64' }
+            0xffff { return 'INVALID' }
         }
     }
 }
@@ -94,15 +96,18 @@ function Get-Arch {
 function Get-Bitness {
     Param(
         [parameter(ValueFromPipeline = $true, Mandatory = $true)]
+        [ValidateScript({ Test-Path $_ })]
         [string]$Exe
     )
 
     $arch = Get-Arch $Exe
     if ($arch -eq 'I386') {
         return 32
-    } elseif ($arch -eq 'AMD64') {
+    }
+    elseif ($arch -eq 'AMD64') {
         return 64
-    } else {
+    }
+    else {
         throw "Unsupported architecture: ${arch}"
     }
 }
@@ -114,77 +119,90 @@ function New-TempDir {
 }
 
 function Get-InstalledSoftware {
-    [cmdletbinding()]
-    Param(            
-        [parameter(ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]            
-        [string[]]$ComputerName = $env:computername            
-    )
 
     Begin {            
-        $UninstallRegKeys = @("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",            
-            "SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall")            
+        $UninstallRegKeys = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',            
+            'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+        $currentPref = $ErrorActionPreference
+        $ErrorActionPreference = 'stop'
     }
 
     Process {
-        foreach ($Computer in $ComputerName) {                        
-            if (Test-Connection -ComputerName $Computer -Count 1 -ea 0) {            
-                foreach ($UninstallRegKey in $UninstallRegKeys) {            
-                    try {            
-                        $HKLM = [microsoft.win32.registrykey]::OpenRemoteBaseKey('LocalMachine', $computer)            
-                        $UninstallRef = $HKLM.OpenSubKey($UninstallRegKey)            
-                        $Applications = $UninstallRef.GetSubKeyNames()            
-                    }
-                    catch {            
-                        Write-Verbose "Failed to read $UninstallRegKey"            
-                        Continue            
-                    }            
-            
-                    foreach ($App in $Applications) {            
-                        $AppRegistryKey = $UninstallRegKey + "\\" + $App            
-                        $AppDetails = $HKLM.OpenSubKey($AppRegistryKey)            
-                        $AppGUID = $App            
-                        $AppDisplayName = $($AppDetails.GetValue("DisplayName"))            
-                        $AppVersion = $($AppDetails.GetValue("DisplayVersion"))            
-                        $AppPublisher = $($AppDetails.GetValue("Publisher"))
-                        $AppInstallLocation = $($AppDetails.GetValue("InstallLocation"))
-                        $AppInstalledDate = $($AppDetails.GetValue("InstallDate"))            
-                        $AppUninstall = $($AppDetails.GetValue("UninstallString"))            
-                        if ($UninstallRegKey -match "Wow6432Node") {            
-                            $Softwarearchitecture = "x86"            
-                        }
-                        else {            
-                            $Softwarearchitecture = "x64"            
-                        }            
-                        if (!$AppDisplayName) { continue }            
-                        $OutputObj = New-Object -TypeName PSobject             
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name ComputerName -Value $Computer.ToUpper()            
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name AppName -Value $AppDisplayName            
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name AppVersion -Value $AppVersion            
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name AppVendor -Value $AppPublisher            
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name InstalledDate -Value $AppInstalledDate
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name InstallLocation -Value $AppInstallLocation
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name UninstallKey -Value $AppUninstall            
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name AppGUID -Value $AppGUID            
-                        $OutputObj | Add-Member -MemberType NoteProperty -Name SoftwareArchitecture -Value $Softwarearchitecture            
-                        $OutputObj            
-                    }            
-                }             
+                   
+        foreach ($UninstallRegKey in $UninstallRegKeys) {        
+            try {            
+                $UninstallRef = Get-Item -Path $UninstallRegKey
+                $Applications = $UninstallRef.GetSubKeyNames()            
+            }
+            catch {            
+                Write-Verbose "Failed to read $UninstallRegKey"            
+                Continue            
             }            
-        }
+            
+            foreach ($App in $Applications) {            
+                $AppRegistryKey = $UninstallRegKey + "\" + $App            
+                $AppDetails = Get-Item -Path $AppRegistryKey
+                $AppGUID = $App            
+                $AppDisplayName = $($AppDetails.GetValue("DisplayName"))            
+                $AppVersion = $($AppDetails.GetValue("DisplayVersion"))            
+                $AppPublisher = $($AppDetails.GetValue("Publisher"))
+                # Special treatment for Amazon Corretto
+                if ($AppDisplayName -and $AppDisplayName.Contains('Corretto')) {
+                    $subkey = if ($AppDisplayName.Contains('JRE')) { 'Java Runtime Environment' } else { 'Java Development Kit' }
+                    $ver = $AppVersion.Split('.')
+                    $verMod = "$($ver[0]).$($ver[1]).$($ver[2])_$($ver[3])"
+                    $jsoftPath = "HKLM:\SOFTWARE\JavaSoft\${subkey}\${verMod}"
+                    try {
+                        $key = Get-Item -Path $jsoftPath
+                        $AppInstallLocation = $key.GetValue('JavaHome')
+                    }
+                    catch {
+                        $AppInstallLocation = $($AppDetails.GetValue("InstallLocation"))
+                    } # Well, it was worth a shot
+                            
+                }
+                else {
+                    $AppInstallLocation = $($AppDetails.GetValue("InstallLocation"))
+                }
+                $AppInstalledDate = $($AppDetails.GetValue("InstallDate"))            
+                $AppUninstall = $($AppDetails.GetValue("UninstallString"))            
+                if ($UninstallRegKey -match "Wow6432Node") {            
+                    $Softwarearchitecture = "x86"            
+                }
+                else {            
+                    $Softwarearchitecture = "x64"            
+                }            
+                if (!$AppDisplayName) { continue }            
+                $OutputObj = New-Object -TypeName PSobject
+                $OutputObj | Add-Member -MemberType NoteProperty -Name AppName -Value $AppDisplayName            
+                $OutputObj | Add-Member -MemberType NoteProperty -Name AppVersion -Value $AppVersion            
+                $OutputObj | Add-Member -MemberType NoteProperty -Name AppVendor -Value $AppPublisher            
+                $OutputObj | Add-Member -MemberType NoteProperty -Name InstalledDate -Value $AppInstalledDate
+                $OutputObj | Add-Member -MemberType NoteProperty -Name InstallLocation -Value $AppInstallLocation
+                $OutputObj | Add-Member -MemberType NoteProperty -Name UninstallKey -Value $AppUninstall            
+                $OutputObj | Add-Member -MemberType NoteProperty -Name AppGUID -Value $AppGUID            
+                $OutputObj | Add-Member -MemberType NoteProperty -Name SoftwareArchitecture -Value $Softwarearchitecture            
+                $OutputObj            
+            }            
+        }             
+           
+    }
+
+    End {
+        $ErrorActionPreference = $currentPref
     }
 }
 
 function Uninstall-InstalledSoftware {
-    Param (            
-        [parameter(ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
-        [string]$ComputerName = $env:computername,
+    Param (
         [parameter(ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, Mandatory = $true)]
         [string]$AppGUID
     )            
 
     try {
-        $proc = Start-Process -Verb RunAs -PassThru -FilePath 'msiexec' -ArgumentList "/x$AppGUID", '/norestart', '/qn'
+        $proc = Start-Process -Verb RunAs -PassThru -FilePath 'msiexec' -ArgumentList "/x$AppGUID", '/quiet', '/norestart', '/qn'
         $proc.WaitForExit()
+        
         return $proc.ExitCode
     }
     finally {
@@ -211,7 +229,7 @@ function Get-JavaInstallations {
 function Get-TemurinInstaller {
     Param(
         [ValidateScript({ $_ -eq 'jdk' -or $_ -eq 'jre' })]
-        [string] $Flavor = 'jdk',
+        [string] $Package = 'jdk',
         [ValidateScript({ $_ -eq 'x64' -or $_ -eq 'x86' })]
         [string] $Arch = 'x64',
         [parameter(Mandatory = $true)]
@@ -220,17 +238,20 @@ function Get-TemurinInstaller {
         [string] $TmpDir
     )
 
-    $url = "${AdoptiumAPI}/v3/installer/latest/${FeatureVersion}/ga/windows/${Arch}/${Flavor}/hotspot/normal/eclipse"
+    $url = "${AdoptiumAPI}/v3/installer/latest/${FeatureVersion}/ga/windows/${Arch}/${Package}/hotspot/normal/eclipse"
     $fileName = "temurin-${Flavor}-${FeatureVersion}.msi"
     $outFile = [System.IO.Path]::Combine($TmpDir, $fileName)
     
     $status = curl.exe -s -w '%{http_code}' $url
 
     if ($status -eq 307) {
-        curl.exe -# -L -o $outFile $url
+        curl.exe -s -L -o $outFile $url
+        if (-not $?) {
+            throw "Failed to download installer for Temurin Java ${FeatureVersion} ($($Package.ToUpperInvariant()))."
+        }
     }
     else {
-        throw "Failed to download Temurin installer!"
+        throw "Failed to get download URL for Temurin Java ${FeatureVersion} ($($Package.ToUpperInvariant()))."
     }
 
     $outFile
@@ -239,10 +260,25 @@ function Get-TemurinInstaller {
 function Install-Temurin {
     Param(
         [parameter(Mandatory = $true)]
-        [string] $MsiInstaller
+        [ValidateScript({ Test-Path $_ })]
+        [string] $MsiInstaller,
+        [ValidateScript({ $_ -eq 'x64' -or $_ -eq 'x86' })]
+        [string] $Arch,
+        [ValidateScript({ $_ -eq 'jdk' -or $_ -eq 'jre' })]
+        [string] $Package
     )
 
-    Start-Process -Wait -FilePath $MsiInstaller -ArgumentList "/quiet"
+    Start-Process -Wait -Verb RunAs -FilePath 'msiexec' -ArgumentList '/i', "`"$MsiInstaller`"", '/quiet', '/norestart', '/qn'
+
+    # Unfortunately, msiexec might report success even if the package was in fact not installed. So we need to double check.
+    if ($?) {
+        $temurin = Get-InstalledSoftware | Where-Object { $_.AppName -and $_.AppName.Contains('Temurin') -and $_.AppName.Contains($Arch) -and $_.AppName.Contains($Package.ToUpperInvariant()) }
+        if ($temurin) {
+            return $true
+        }
+        return $false
+    }
+    return $false
 }
 
 function Get-JavaVersion {
@@ -265,9 +301,11 @@ function Get-JavaFeatureVersion {
     )
 
     $components = $FullVersion.Split('.')
-    if ([int]($components[0]) -eq 1) { # Java 8 or older
+    if ([int]($components[0]) -eq 1) {
+        # Java 8 or older
         [int]($components[1])
-    } else {
+    }
+    else {
         [int]($components[0])
     }
 }
@@ -328,6 +366,11 @@ function Test-DefaultIsJRE {
     }
 }
 
+function Test-HasCorretto {
+    $oracle, $openJDKs = Get-JavaInstallations
+    ($openJDKs | Where-Object { $_.AppName -and $_.AppName.Contains('Corretto') }).Count -gt 0
+}
+
 function Test-IsJDK {
     Param(
         [parameter(ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, Mandatory = $true)]
@@ -348,7 +391,8 @@ function Get-JavaVendor {
         $isOpenJDK = & $Exe -version 2>&1 | Select-String -SimpleMatch 'OpenJDK' -Quiet
         if ($isOpenJDK) {
             return 'OpenJDK'
-        } else {
+        }
+        else {
             return 'Oracle'
         }
     }
@@ -431,6 +475,18 @@ tools, replacing Oracle JRE with Temurin is a reasonable choice.
 "@
 }
 
+function Write-CorrettoWarning {
+    Write-Host -ForegroundColor Yellow @"
+It seems that you have at least one version of Amazon Corretto installed. Because Corretto makes it annoyingly hard to determine its
+install location, this script will ignore Corretto installations for the most part. There is now real harm in it, but you might end
+up with some extra Temurin JDKs although Corretto could be used. Also, the default Java might get switched to Temurin if it was
+Corretto before.
+
+If you like your Corretto, then I suggest to stop now. If on the other hand, you think that Temurin is cool too (or you don't care)
+you may safely continue.
+"@
+}
+
 function Receive-Answer {
     Param(
         [string] $Question
@@ -442,7 +498,8 @@ function Receive-Answer {
         if ($answer.ToLowerInvariant() -ne 'y' -and $answer.ToLowerInvariant() -ne 'n') {
             Write-Host -ForegroundColor DarkGray "Please just answer with either 'y' or 'n'."
             $answer = $null
-        } else {
+        }
+        else {
             return $answer -eq 'y'
         }
     }
@@ -459,18 +516,41 @@ function Receive-AnswerInfo {
         if ($answer.ToLowerInvariant() -ne 'y' -and $answer.ToLowerInvariant() -ne 'n' -and $answer.ToLowerInvariant() -ne 'i') {
             Write-Host -ForegroundColor DarkGray "Please just answer with either 'y', 'n' or 'i."
             $answer = $null
-        } else {
+        }
+        else {
             return $answer
         }
     }
 }
 
 function _dealWithJDKs {
-     # JDKs
-     Write-Title 'Java Development Kits (JDKs)'
-     Write-Subtitle 'OpenJDK' 'Looking for OpenJDK installations on the system.'
- 
-     Write-Subtitle 'Oracle JDKs' 'Looking for Oracle JDK installations on the system.'
+    # JDKs
+    Write-Title 'Java Development Kits (JDKs)'
+    Write-Subtitle 'OpenJDK' 'Looking for OpenJDK installations on the system.'
+    $allOracle, $allOpenJDKs = Get-JavaInstallations
+    $openJDKs = $allOpenJDKs | Where-Object { $_.AppName.Contains('JDK') -and $_.InstallLocation }
+    if (-not $openJDKs) {
+        Write-Host 'No installations found!'
+    }
+
+    foreach ($oj in $openJDKs) {
+        $facts = Get-JavaHomeFacts $oj.InstallLocation
+        $flavor = if ($oj.AppVendor -eq 'Eclipse Adoptium') { 'Eclipse Temurin' } else { 'OpenJDK' }
+        Write-Host -ForegroundColor Green "Found ${flavor} JDK $($facts.Feature) ($($facts.Version)) for $($facts.Arch)!"
+        Write-Host ''
+    }
+
+    Write-Subtitle 'Oracle JDKs' 'Looking for Oracle JDK installations on the system.'
+    $oracleJDKs = $allOracle | Where-Object { $_.AppName.Contains("Develop") }
+    if (-not $oracleJDKs) {
+        Write-Host -ForegroundColor Green 'No installations found!'
+    }
+
+    foreach ($oracle in $oracleJDKs) {
+        $facts = Get-JavaHomeFacts $oracle.InstallLocation
+        Write-Host -ForegroundColor Yellow "Found Oracle JDK $($facts.Feature) ($($facts.Version)) for $($facts.Arch)!"
+        Write-Host ''
+    }
 }
 
 function _dealWithJRE {
@@ -479,12 +559,20 @@ function _dealWithJRE {
     Write-Subtitle 'Oracle JRE' 'Looking for Oracle JRE installations on the system.'
     $allOracle, $allOpenJDKs = Get-JavaInstallations
     $oracleJREs = $allOracle | Where-Object { -not $_.AppName.Contains("Develop") }
-    
+    $openJREs = $allOpenJDKs | Where-Object { $_.AppName -and $_.AppName.Contains('JRE') -and $_.InstallLocation }
+    $openJREsX86 = $openJREs | Where-Object { $_.SoftwareArchitecture -and $_.SoftwareArchitecture -eq 'x86' }
+    $openJREsX64 = $openJREs | Where-Object { $_.SoftwareArchitecture -and $_.SoftwareArchitecture -eq 'x64' }
+
     # Note: Since on Windows the JRE is not as 'special' as on macOS, we could also do JREs and JDKs in one go,
     # but we are trying to stay somewhat close to the macOS version.
     $toRemove = @()
     $needX86JRE = $False
     $needX64JRE = $False
+
+    if (-not $oracleJREs) {
+        Write-Host -ForegroundColor Green 'No installations found!'
+    }
+
     foreach ($jre in $oracleJREs) {
         $facts = Get-JavaHomeFacts $jre.InstallLocation
         $replace = $False
@@ -511,7 +599,8 @@ function _dealWithJRE {
                 Write-DeprecatedVersionInfo
             }
             $replace = Receive-Answer $q
-        } elseif ($resp -eq 'y') {
+        }
+        elseif ($resp -eq 'y') {
             $replace = $true
         }
 
@@ -520,10 +609,12 @@ function _dealWithJRE {
             $toRemove += $jre
             if ($facts.Arch -eq 'x86') {
                 $needX86JRE = $true
-            } elseif ($facts.Arch -eq 'x64') {
+            }
+            elseif ($facts.Arch -eq 'x64') {
                 $needX64JRE = $true
             }
-        } else {
+        }
+        else {
             Write-Host "Fine. I won't touch it."
         }
 
@@ -531,17 +622,89 @@ function _dealWithJRE {
     }
 
     # Oracle doesn't publish JREs for Java > 8 anymore, so we just need to make sure that a OpenJDK JRE 8 is available.
-    if ($toRemove.Count -gt 0) {
+    if ($toRemove) {
         Write-Subtitle 'Replacement' 'Installing Temurin JRE if necessary'
-        $openJDKJREs = $allOpenJDKs | Where-Object { $_.AppName.Contains("JRE") -and -not $_.AppName.Contains("JDK") }
         if ($needX86JRE) {
-            Write-Host '‣ Checking if Temurin JRE (32-bit) is already installed.'
+            if(_checkAndDownloadTemurin 'x86' 'jre' 8 $openJREsX86) {
+                Write-Host ''
+                _nukeOracleJavas 'x86' $toRemove
+            }
         }
 
         if ($needX64JRE) {
-            Write-Host '‣ Checking if Temurin JRE (64-bit) is already installed.'
+            if (_checkAndDownloadTemurin 'x64' 'jre' 8 $openJREsX64) {
+                Write-Host ''
+                _nukeOracleJavas 'x64' $toRemove
+            }
+        }
+    }
+
+    Write-Host ''
+}
+
+function _nukeOracleJavas {
+    Param(
+        [string] $Arch,
+        [Object[]] $Candidates
+    )
+
+    Write-Subtitle 'Removal' 'Uninstalling Oracle Javas'
+    foreach($morturi in $Candidates) {
+        $facts = Get-JavaHomeFacts $morturi.InstallLocation
+        $package = if ($facts.JDK) { 'JDK' } else { 'JRE' }
+        Write-Host "‣ Uninstalling Oracle ${package} $($facts.Feature) ($($facts.Version)) for ${Arch}. Please be patient. This might take a while."
+        if ($morturi.SoftwareArchitecture -eq $Arch) {
+            $rv = Uninstall-InstalledSoftware $morturi.AppGUID
+            if($rv -ne 0) {
+                Write-Host -ForegroundColor Red "Failed to uninstall Oracle ${package} $($facts.Feature) ($($facts.Version)) for ${Arch}!"
+            } else {
+                Write-Host -ForegroundColor Green "Uninstalled Oracle ${package} $($facts.Feature) ($($facts.Version)) for ${Arch}!"
+            }
+        }
+    }
+}
+
+function _checkAndDownloadTemurin {
+    Param(
+        [string] $Arch,
+        [string] $Package,
+        [int] $FeatureVersion,
+        [Object[]] $Installs
+    )
+
+    Write-Host "‣ Checking if Temurin $($Package.ToUpperInvariant()) ($(if ($Arch -eq 'x64') { '64-bit' } else { '32-bit' })) or other equivalent OpenJDK is already installed."
+    if ($Installs.Count -gt 0) {
+        Write-Host -ForegroundColor Green 'Found! Skipping download and installation.'
+        return $true
+    } else {
+        Write-Host -ForegroundColor Yellow 'Not found! Will download and install Temurin JRE. (Please be patient.)'
+
+        while($true) {
+            try {
+                $installer = Get-TemurinInstaller -Package $Package -Arch $Arch -FeatureVersion $FeatureVersion -TmpDir $tdir
+                break
+            } catch {
+                Write-Host -ForegroundColor Red $_
+                if (-not (Receive-Answer 'Do you want to try again?')) {
+                    Write-Host 'Giving up!'
+                    return $false
+                }
+            }
         }
 
+        Write-Host "‣ Installing Temurin $($Package.ToUpperInvariant()) ${FeatureVersion}."
+        while($true) {
+            if (-not (Install-Temurin -MsiInstaller $installer -Arch $Arch -Package $Package)) {
+                Write-Host -ForegroundColor Red "Failed to install Temurin $($Package.ToUpperInvariant())!"
+                if (-not (Receive-Answer 'Do you want to try again?')) {
+                    Write-Host 'Giving up!'
+                    return $false
+                }
+            } else {
+                Write-Host -ForegroundColor Green "Temurin $($Package.ToUpperInvariant()) successfully installed!"
+                return $true
+            }
+        }
     }
 }
 
@@ -550,7 +713,8 @@ function _precheckConnectivity {
     Write-Subtitle 'Connectivity' "Trying to reach the Adoptium API at ${AdoptiumAPI}"
     if (Test-CanConnect) {
         Write-Host -ForegroundColor Green "Excellent! Adoptium API is responding!`r`n"
-    } else {
+    }
+    else {
         Write-Host -ForegroundColor Red 'Failed to connect!'
         Write-Host ''
         Write-Host -ForegroundColor Yellow @"
@@ -567,13 +731,15 @@ function _precheckShellElevation {
     Write-Subtitle 'Admin Rights' 'Checking if we are running in an elevated shell.'
     if (Test-Elevated) {
         Write-Host -ForegroundColor Green "Swell! It looks like we are running in an elevated command prompt!`r`n"
-    } elseif (Test-IsInLocalAdmins) {
+    }
+    elseif (Test-IsInLocalAdmins) {
         Write-Host -ForegroundColor DarkGreen @"
 Great! It looks like your account is a local admin. It is possible that you will see a bunch of UAC prompts along the way.
 If you don't feel like clicking, consider re-running this script in an elevated PowerShell prompt.
 
 "@
-    } else {
+    }
+    else {
         Write-Host -ForegroundColor Yellow @"
 Warning! Could not determine if your account has local admin rights. It is possible that you do if e.g. your account
 inherits the right indirectly via AD group membership. However determining this is beyond the capabilities of this
@@ -585,10 +751,30 @@ To make everything crystal clear, it is recommended to stop now and re-run the s
         if (Receive-Answer 'Do you want to stop now?') {
             Write-Host 'Okay. See you later!'
             exit
-        } else {
+        }
+        else {
             Write-Host "Fine. We'll continue. But if I fail it is on you!`r`n"
         }
     }
+}
+
+function _precheckCorretto {
+    # Amazon Corretto
+    Write-Subtitle 'Corretto' 'Checking if Amazon Corretto OpenJDK is installed.'
+    if (Test-HasCorretto) {
+        Write-CorrettoWarning
+        if (Receive-Answer 'Do you want to stop now?') {
+            Write-Host 'Fair enough. Bye!'
+            Exit
+        }
+        else {
+            Write-Host "Cool! Let's continue."
+        }
+    }
+    else {
+        Write-Host -ForegroundColor Green 'No Corretto installations found.'
+    }
+    Write-Host ''
 }
 
 # because on Windows installation sequence matters, we must remember which Java version is the default.
@@ -602,9 +788,9 @@ function Get-JavaHomeFacts {
         [string]$JavaHome
     )
 
-    if(-not (Test-Path $JavaHome)) {
+    if (-not (Test-Path $JavaHome)) {
         Write-Host -ForegroundColor Red "JAVA_HOME seems to point to an invalid location: ${JavaHome}"
-        return @{ Version = '0.0.0'; Feature = 0; JDK =  $false; Vendor = $null; Arch = $null }
+        return @{ Version = '0.0.0'; Feature = 0; JDK = $false; Vendor = $null; Arch = $null }
     }
 
     $ver = Get-JavaVersion "${JavaHome}\bin\java.exe"
@@ -615,13 +801,15 @@ function Get-JavaHomeFacts {
 
     if ($bitness -eq 32) {
         $arch = 'x86'
-    } elseif ($bitness -eq 64) {
+    }
+    elseif ($bitness -eq 64) {
         $arch = 'x64'
-    } else {
+    }
+    else {
         throw "Unxpected: Bitness reported as ${bitness}-bit"
     }
 
-    return @{ Version = $ver; Feature = $feature; JDK =  $isJDK; Vendor = $vendor; Arch = $arch }
+    return @{ Version = $ver; Feature = $feature; JDK = $isJDK; Vendor = $vendor; Arch = $arch }
 }
 
 function Get-DefaultJavaFacts {
@@ -633,9 +821,11 @@ function Get-DefaultJavaFacts {
 
     if ($bitness -eq 32) {
         $arch = 'x86'
-    } elseif ($bitness -eq 64) {
+    }
+    elseif ($bitness -eq 64) {
         $arch = 'x64'
-    } else {
+    }
+    else {
         throw "Unxpected: Bitness reported as ${bitness}-bit"
     }
 
@@ -655,7 +845,8 @@ function _precheckDefaultJava {
             Exit
         }
         
-    } else {
+    }
+    else {
         Write-Host "‣ Could not find a default Java installation."
     }
 
@@ -664,17 +855,20 @@ function _precheckDefaultJava {
         if ($jhome.ContainsKey('System') -and -not $jhome.ContainsKey('User')) {
             Write-Host "‣ It looks like a system-wide environment variable JAVA_HOME is set and it is pointing to $($jhome['System'])"
             $SystemJavaHomeFacts = Get-JavaHomeFacts $jhome['System']
-        } elseif ($jhome.ContainsKey('User') -and -not $jhome.ContainsKey('System')) {
+        }
+        elseif ($jhome.ContainsKey('User') -and -not $jhome.ContainsKey('System')) {
             Write-Host "‣ It looks like the user-specific environment variable JAVA_HOME is set and it is pointing to $($jhome['User'])"
             $UserJavaHomeFacts = Get-JavaHomeFacts $jhome['User']
-        } else {
+        }
+        else {
             # System has both system-wide and per-user JAVA_HOME set.
             Write-Host "‣ It looks like a system-wide environment variable JAVA_HOME is set and it is pointing to $($jhome['System'])"
             Write-Host "‣ In addition, a user-specific variable is set (overriding the system-wide variable) and is pointing to $($jhome['User'])"
             $UserJavaHomeFacts = Get-JavaHomeFacts $jhome['User']
             $SystemJavaHomeFacts = Get-JavaHomeFacts $jhome['System']
         }
-    } else {
+    }
+    else {
         Write-Host '‣ It seems that the environment variable JAVA_HOME is not set.'
     }
 
@@ -686,6 +880,7 @@ function _prechecks {
     _precheckDefaultJava
     _precheckShellElevation
     _precheckConnectivity
+    _precheckCorretto
 }
 
 function Test-CanConnect {
@@ -711,6 +906,8 @@ finally {
 #$o, $oj = Get-JavaInstallations
 
 #$oj | fl *
+#$o | fl *
+
 #$tdir = New-TempDir
 #$msi = Get-TemurinInstaller -FeatureVersion 11 -TmpDir $tdir
 #Install-Temurin -MsiInstaller $msi
@@ -718,6 +915,7 @@ finally {
 # Get-JavaVersion 'java.exe' | Get-JavaFeatureVersion
 #$installs = Get-InstalledSoftware | Where-Object { $_.AppVendor -and $_.AppVendor.StartsWith('Oracle') -and $_.InstallLocation }
 #$installs | fl *
+
 #foreach ($install in $installs) {
 #    $path = "$($install.InstallLocation)bin\java.exe"
 #    Write-Host "Path is: $path"
