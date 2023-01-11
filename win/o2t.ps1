@@ -18,6 +18,95 @@ function Test-CommandOnPath {
     }
 }
 
+function Get-Arch {
+    [CmdletBinding(DefaultParameterSetName="None")]
+    PARAM(
+    	[ValidateNotNullOrEmpty()]
+    	[ValidateScript({Test-Path $_})]
+    	[string]
+    	$Path
+    )
+    
+    BEGIN {
+        # PE Header machine offset
+        [int32]$MACHINE_OFFSET = 4
+        # PE Header pointer offset
+        [int32]$PE_POINTER_OFFSET = 60
+        # Initial byte array size
+        [int32]$PE_HEADER_SIZE = 4096
+    }
+    
+    PROCESS {
+        # Create a location to place the byte data
+        [byte[]]$BYTE_ARRAY = New-Object -TypeName System.Byte[] -ArgumentList @(,$PE_HEADER_SIZE)
+        # Open the file for read access
+        try {
+            $FileStream = New-Object -TypeName System.IO.FileStream -ArgumentList ($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read)
+            # Read the requested byte length into the byte array
+            $FileStream.Read($BYTE_ARRAY, 0, $BYTE_ARRAY.Length) | Out-Null
+        } finally {
+            $FileStream.Close()
+            $FileStream.Dispose()
+        }
+        #
+        [int32]$PE_HEADER_ADDR = [System.BitConverter]::ToInt32($BYTE_ARRAY, $PE_POINTER_OFFSET)
+        try {
+    	    [int32]$machineUint = [System.BitConverter]::ToUInt16($BYTE_ARRAY, $PE_HEADER_ADDR + $MACHINE_OFFSET)
+        } catch {
+    	    $machineUint = 0xffff
+        }
+        switch ($machineUint) {
+    	    0x0000 {return 'UNKNOWN'}
+    	    0x0184 {return 'ALPHA'}
+    	    0x01d3 {return 'AM33'}
+    	    0x8664 {return 'AMD64'}
+    	    0x01c0 {return 'ARM'}
+    	    0x01c4 {return 'ARMNT'} # aka ARMV7
+    	    0xaa64 {return 'ARM64'} # aka ARMV8
+    	    0x0ebc {return 'EBC'}
+    	    0x014c {return 'I386'}
+    	    0x014d {return 'I860'}
+    	    0x0200 {return 'IA64'}
+    	    0x0268 {return 'M68K'}
+    	    0x9041 {return 'M32R'}
+    	    0x0266 {return 'MIPS16'}
+    	    0x0366 {return 'MIPSFPU'}
+    	    0x0466 {return 'MIPSFPU16'}
+    	    0x01f0 {return 'POWERPC'}
+    	    0x01f1 {return 'POWERPCFP'}
+    	    0x01f2 {return 'POWERPCBE'}
+    	    0x0162 {return 'R3000'}
+    	    0x0166 {return 'R4000'}
+    	    0x0168 {return 'R10000'}
+    	    0x01a2 {return 'SH3'}
+    	    0x01a3 {return 'SH3DSP'}
+    	    0x01a6 {return 'SH4'}
+    	    0x01a8 {return 'SH5'}
+    	    0x0520 {return 'TRICORE'}
+    	    0x01c2 {return 'THUMB'}
+    	    0x0169 {return 'WCEMIPSV2'}
+    	    0x0284 {return 'ALPHA64'}
+    	    0xffff {return 'INVALID'}
+        }
+    }
+}
+
+function Get-Bitness {
+    Param(
+        [parameter(ValueFromPipeline = $true, Mandatory = $true)]
+        [string]$Exe
+    )
+
+    $arch = Get-Arch $Exe
+    if ($arch -eq 'I386') {
+        return 32
+    } elseif ($arch -eq 'AMD64') {
+        return 64
+    } else {
+        throw "Unsupported architecture: ${arch}"
+    }
+}
+
 function New-TempDir {
     # Make a new folder based upon a TempFileName
     $T = "$($Env:Temp)\o2t.$([convert]::ToString((Get-Random -Maximum 0x7FFFFFFF),16).PadLeft(8,'0')).tmp"
@@ -121,14 +210,17 @@ function Get-JavaInstallations {
 
 function Get-TemurinInstaller {
     Param(
+        [ValidateScript({ $_ -eq 'jdk' -or $_ -eq 'jre' })]
         [string] $Flavor = 'jdk',
+        [ValidateScript({ $_ -eq 'x64' -or $_ -eq 'x86' })]
+        [string] $Arch = 'x64',
         [parameter(Mandatory = $true)]
         [int] $FeatureVersion,
         [parameter(Mandatory = $true)]
         [string] $TmpDir
     )
 
-    $url = "${AdoptiumAPI}/v3/installer/latest/${FeatureVersion}/ga/windows/x64/${Flavor}/hotspot/normal/eclipse"
+    $url = "${AdoptiumAPI}/v3/installer/latest/${FeatureVersion}/ga/windows/${Arch}/${Flavor}/hotspot/normal/eclipse"
     $fileName = "temurin-${Flavor}-${FeatureVersion}.msi"
     $outFile = [System.IO.Path]::Combine($TmpDir, $fileName)
     
@@ -174,9 +266,9 @@ function Get-JavaFeatureVersion {
 
     $components = $FullVersion.Split('.')
     if ([int]($components[0]) -eq 1) { # Java 8 or older
-        $components[1]
+        [int]($components[1])
     } else {
-        $components[0]
+        [int]($components[0])
     }
 }
 
@@ -185,23 +277,16 @@ function Get-JavaHomeVar {
     $systemVars = [System.Environment]::GetEnvironmentVariables([System.EnvironmentVariableTarget]::Machine)
     $userVars = [System.Environment]::GetEnvironmentVariables([System.EnvironmentVariableTarget]::User)
 
-    $rv = New-Object -TypeName PSobject
+    $rv = @{}
 
     if ($systemVars.ContainsKey('JAVA_HOME')) {
-        $rv | Add-Member -MemberType NoteProperty -Name VariableStore -Value 'System'
-        $rv | Add-Member -MemberType NoteProperty -Name Value -Value $systemVars['JAVA_HOME']
+        $rv['System'] = $systemVars['JAVA_HOME']
     }
 
     if ($userVars.ContainsKey('JAVA_HOME')) {
-        $rv | Add-Member -MemberType NoteProperty -Name VariableStore -Value 'User'
-        $rv | Add-Member -MemberType NoteProperty -Name Value -Value $userVars['JAVA_HOME']
+        $rv['User'] = $userVars['JAVA_HOME']
     }
-
-    if (-not $userVars.ContainsKey('JAVA_HOME') -and -not $systemVars.ContainsKey('JAVA_HOME')) {
-        $rv | Add-Member -MemberType NoteProperty -Name VariableStore -Value $null
-        $rv | Add-Member -MemberType NoteProperty -Name Value -Value $null
-    }
-
+    
     $rv
 }
 
@@ -213,9 +298,16 @@ function Test-DefaultIsJRE {
     $hasRuntime = Test-CommandOnPath 'java.exe'
 
     if ($hasRuntime -and $hasCompiler) {
+        $rtPath = (Get-Command 'java.exe' | Get-Item).DirectoryName
+        $compPath = (Get-Command 'javac.exe' | Get-Item).DirectoryName
+
+        if ($rtPath -ne $compPath) {
+            return $true
+        }
+
         # Not quite done yet...
-        $runtimeVersion = Get-JavaVersion
-        $compilerVersion = '0.0.0' # TODO
+        $runtimeVersion = Get-JavaVersion 'java.exe'
+        $compilerVersion = Get-JavaVersion 'javac.exe'
 
         if ($compilerVersion -eq $runtimeVersion) {
             # If compiler version matches runtime version, our best guess is that the default
@@ -229,7 +321,7 @@ function Test-DefaultIsJRE {
         }
     }
     elseif ($hasRuntime -and -not $hasCompiler) {
-        return $true # -> very likely it is just the JRE
+        return $true # -> it is just the JRE
     }
     else {
         throw 'Java compiler but no runtime found!' # This is weird.
@@ -248,15 +340,20 @@ function Test-IsJDK {
     [System.IO.File]::Exists($compiler) -and [System.IO.File]::Exists($runtime)
 }
 
-function Test-IsOpenJDK {
+function Get-JavaVendor {
     Param(
         [string] $Exe
     )
     if ([System.IO.File]::Exists($Exe) -or $(Test-CommandOnPath $Exe)) {
-        & $Exe -version 2>&1 | Select-String -SimpleMatch 'OpenJDK' -Quiet
+        $isOpenJDK = & $Exe -version 2>&1 | Select-String -SimpleMatch 'OpenJDK' -Quiet
+        if ($isOpenJDK) {
+            return 'OpenJDK'
+        } else {
+            return 'Oracle'
+        }
     }
     else {
-        throw "$Exe does not seem to exist!"
+        throw "$Exe does not seem to exist (or is not a file)!"
     }
 }
 
@@ -288,6 +385,52 @@ function Write-Subtitle {
     Write-Host -ForegroundColor DarkGray $Message
 }
 
+function Write-AncientVersionWarning {
+    Param(
+        [string] $ActionMessage
+    )
+
+    Write-Host -ForegroundColor Yellow @"
+It looks like you have Oracle Java 6 or older installed. Note that this Java version is very old, is no longer supported, and hasn't
+received any updates in years. Unless you have it on your machine for specific reasons (e.g. to run a piece of legacy software) it is
+highly recommended to switch to a supported version of Java. 
+
+Temurin does not provide compatible OpenJDK builds for Java 6 or older. Therefore ${ActionMessage}.
+
+"@
+}
+
+function Write-DeprecatedVersionInfo {
+
+    Write-Host -ForegroundColor Yellow @"
+Java 7 is no longer supported and Temurin does not provide builds for it. Replacing it with Java 8 is likely a safe and sane option.
+That said, there is a slim chance that some older Java applications will not run properly under Java 8.
+
+"@
+
+}
+
+function Write-JREInfo {
+    Write-Host @"
+
+It seems that you have at least one version of Oracle JRE installed. Apart from the JVM, Oracle's JRE ships with two components that
+never have been open-sourced:
+
+  • support for Java applets (run Java applications inside a browser)
+  • support for Java Web Start (start Java applications from within a browser)
+
+As Temurin JRE cannot include these proprietary extensions, it is not a 1:1 replacement for Oracle. That said, Java applets are deprecated
+for a long time and it is unlikely that you still need this functionality.
+
+Java Web Start is deprecated too as of Java 9, however it is still used sometimes. If you still need support for Java Web Start, I would
+recommend that you check out Open Web Start (https://openwebstart.com/) which offers an open source replacement for Java Web Start.
+
+If you don't care about applets or Web Start and just have the JRE installed because you want a Java runtime without any of the developer
+tools, replacing Oracle JRE with Temurin is a reasonable choice.
+
+"@
+}
+
 function Receive-Answer {
     Param(
         [string] $Question
@@ -303,7 +446,23 @@ function Receive-Answer {
             return $answer -eq 'y'
         }
     }
+}
 
+function Receive-AnswerInfo {
+    Param(
+        [string] $Question
+    )
+
+    $answer = $null
+    while (-not $answer) {
+        $answer = Read-Host -Prompt "${Question} [y/n] (or [i] if you need more info)"
+        if ($answer.ToLowerInvariant() -ne 'y' -and $answer.ToLowerInvariant() -ne 'n' -and $answer.ToLowerInvariant() -ne 'i') {
+            Write-Host -ForegroundColor DarkGray "Please just answer with either 'y', 'n' or 'i."
+            $answer = $null
+        } else {
+            return $answer
+        }
+    }
 }
 
 function _dealWithJDKs {
@@ -317,7 +476,73 @@ function _dealWithJDKs {
 function _dealWithJRE {
     # JRE
     Write-Title 'Java Runtime Environment (JRE)'
-    Write-Subtitle 'Oracle JRE' 'Looking for an installation of Oracle JRE on the system.'
+    Write-Subtitle 'Oracle JRE' 'Looking for Oracle JRE installations on the system.'
+    $allOracle, $allOpenJDKs = Get-JavaInstallations
+    $oracleJREs = $allOracle | Where-Object { -not $_.AppName.Contains("Develop") }
+    
+    # Note: Since on Windows the JRE is not as 'special' as on macOS, we could also do JREs and JDKs in one go,
+    # but we are trying to stay somewhat close to the macOS version.
+    $toRemove = @()
+    $needX86JRE = $False
+    $needX64JRE = $False
+    foreach ($jre in $oracleJREs) {
+        $facts = Get-JavaHomeFacts $jre.InstallLocation
+        $replace = $False
+        Write-Host -NoNewline -ForegroundColor Yellow "Found Oracle JRE $($facts.Feature) ($($facts.Version)) for $($facts.Arch)"
+
+        if ($facts.Feature -lt 7) {
+            Write-Host -ForegroundColor Red ' (ancient version!)'
+        }
+        elseif ($facts.Feature -lt 8) {
+            Write-Host -ForegroundColor Yellow ' (deprecated version!)'
+        }
+        else {
+            Write-Host -ForegroundColor Yellow '!'
+        }
+        $q = "Do you want to replace Oracle JRE $($facts.Feature)?"
+        $resp = Receive-AnswerInfo $q
+
+        if ($resp -eq 'i') {
+            Write-JREInfo
+            if ($facts.Feature -lt 7) {
+                Write-AncientVersionWarning 'some Java applications might no longer work if it is replaced with Temurin JRE'
+            }
+            elseif ($facts.Feature -lt 8) {
+                Write-DeprecatedVersionInfo
+            }
+            $replace = Receive-Answer $q
+        } elseif ($resp -eq 'y') {
+            $replace = $true
+        }
+
+        if ($replace) {
+            Write-Host "Excellent! Marking it for removal and replacement."
+            $toRemove += $jre
+            if ($facts.Arch -eq 'x86') {
+                $needX86JRE = $true
+            } elseif ($facts.Arch -eq 'x64') {
+                $needX64JRE = $true
+            }
+        } else {
+            Write-Host "Fine. I won't touch it."
+        }
+
+        Write-Host ''
+    }
+
+    # Oracle doesn't publish JREs for Java > 8 anymore, so we just need to make sure that a OpenJDK JRE 8 is available.
+    if ($toRemove.Count -gt 0) {
+        Write-Subtitle 'Replacement' 'Installing Temurin JRE if necessary'
+        $openJDKJREs = $allOpenJDKs | Where-Object { $_.AppName.Contains("JRE") -and -not $_.AppName.Contains("JDK") }
+        if ($needX86JRE) {
+            Write-Host '‣ Checking if Temurin JRE (32-bit) is already installed.'
+        }
+
+        if ($needX64JRE) {
+            Write-Host '‣ Checking if Temurin JRE (64-bit) is already installed.'
+        }
+
+    }
 }
 
 #region pre-checks
@@ -366,20 +591,89 @@ To make everything crystal clear, it is recommended to stop now and re-run the s
     }
 }
 
+# because on Windows installation sequence matters, we must remember which Java version is the default.
+
+$DefaultJavaFacts = $null
+$UserJavaHomeFacts = $null
+$SystemJavaHomeFacts = $null
+
+function Get-JavaHomeFacts {
+    Param(
+        [string]$JavaHome
+    )
+
+    if(-not (Test-Path $JavaHome)) {
+        Write-Host -ForegroundColor Red "JAVA_HOME seems to point to an invalid location: ${JavaHome}"
+        return @{ Version = '0.0.0'; Feature = 0; JDK =  $false; Vendor = $null; Arch = $null }
+    }
+
+    $ver = Get-JavaVersion "${JavaHome}\bin\java.exe"
+    $feature = Get-JavaFeatureVersion $ver
+    $isJDK = Test-IsJDK $JavaHome
+    $vendor = Get-JavaVendor "${JavaHome}\bin\java.exe"
+    $bitness = Get-Bitness "${JavaHome}\bin\java.exe"
+
+    if ($bitness -eq 32) {
+        $arch = 'x86'
+    } elseif ($bitness -eq 64) {
+        $arch = 'x64'
+    } else {
+        throw "Unxpected: Bitness reported as ${bitness}-bit"
+    }
+
+    return @{ Version = $ver; Feature = $feature; JDK =  $isJDK; Vendor = $vendor; Arch = $arch }
+}
+
+function Get-DefaultJavaFacts {
+    $ver = Get-JavaVersion 'java.exe'
+    $feature = Get-JavaFeatureVersion $ver
+    $isJRE = Test-DefaultIsJRE
+    $vendor = Get-JavaVendor 'java.exe'
+    $bitness = Get-Bitness (Get-Command 'java.exe').Source
+
+    if ($bitness -eq 32) {
+        $arch = 'x86'
+    } elseif ($bitness -eq 64) {
+        $arch = 'x64'
+    } else {
+        throw "Unxpected: Bitness reported as ${bitness}-bit"
+    }
+
+    return @{ Version = $ver; Feature = $feature; JDK = -not $isJRE; Vendor = $vendor; Arch = $arch }
+}
+
 function _precheckDefaultJava {
     Write-Subtitle 'Default Installation' 'Looking for a default Java installation and checking JAVA_HOME.'
 
     $ver = Get-JavaVersion 'java.exe'
     if ($ver -ne '0.0.0') {
-        $featureVer = Get-JavaFeatureVersion $ver
-        Write-Host "‣ It looks like at least one version of Java is installed: $(if (Test-IsOpenJDK 'java.exe ') { 'OpenJDK' } else { 'Oracle' }) Java ${featureVer} ($ver)"
+        $DefaultJavaFacts = Get-DefaultJavaFacts
+        Write-Host "‣ It looks like at least one version of Java is installed: $($DefaultJavaFacts.Vendor) Java $(if($DefaultJavaFacts.JDK) { 'JDK' } else { 'JRE' }) $($DefaultJavaFacts.Feature) ($($DefaultJavaFacts.Version)) for $($DefaultJavaFacts.Arch)"
+
+        if ($DefaultJavaFacts.Feature -lt 7) {
+            Write-AncientVersionWarning 'execution of this script will now stop'
+            Exit
+        }
+        
     } else {
         Write-Host "‣ Could not find a default Java installation."
     }
 
     $jhome = Get-JavaHomeVar
-    if ($jhome.VariableStore) {
-        Write-Host "‣ It looks like the environment variable JAVA_HOME is set and it is pointing to $($jhome.Value)"
+    if ($jhome.Count -gt 0) {
+        if ($jhome.ContainsKey('System') -and -not $jhome.ContainsKey('User')) {
+            Write-Host "‣ It looks like a system-wide environment variable JAVA_HOME is set and it is pointing to $($jhome['System'])"
+            $SystemJavaHomeFacts = Get-JavaHomeFacts $jhome['System']
+        } elseif ($jhome.ContainsKey('User') -and -not $jhome.ContainsKey('System')) {
+            Write-Host "‣ It looks like the user-specific environment variable JAVA_HOME is set and it is pointing to $($jhome['User'])"
+            $UserJavaHomeFacts = Get-JavaHomeFacts $jhome['User']
+        } else {
+            # System has both system-wide and per-user JAVA_HOME set.
+            Write-Host "‣ It looks like a system-wide environment variable JAVA_HOME is set and it is pointing to $($jhome['System'])"
+            Write-Host "‣ In addition, a user-specific variable is set (overriding the system-wide variable) and is pointing to $($jhome['User'])"
+            $UserJavaHomeFacts = Get-JavaHomeFacts $jhome['User']
+            $SystemJavaHomeFacts = Get-JavaHomeFacts $jhome['System']
+        }
     } else {
         Write-Host '‣ It seems that the environment variable JAVA_HOME is not set.'
     }
@@ -414,14 +708,16 @@ finally {
     }
 }
 
+#$o, $oj = Get-JavaInstallations
 
-
+#$oj | fl *
 #$tdir = New-TempDir
 #$msi = Get-TemurinInstaller -FeatureVersion 11 -TmpDir $tdir
 #Install-Temurin -MsiInstaller $msi
 
 # Get-JavaVersion 'java.exe' | Get-JavaFeatureVersion
 #$installs = Get-InstalledSoftware | Where-Object { $_.AppVendor -and $_.AppVendor.StartsWith('Oracle') -and $_.InstallLocation }
+#$installs | fl *
 #foreach ($install in $installs) {
 #    $path = "$($install.InstallLocation)bin\java.exe"
 #    Write-Host "Path is: $path"
