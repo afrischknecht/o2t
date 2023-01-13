@@ -1,7 +1,33 @@
+#region global vars
 Set-Variable -Name AdoptiumAPI -Option Constant -Value 'https://api.adoptium.net'
+# temporary download directory where .msi files are stored (cf. New-TempDir, Get-TemurinInstaller)
 $global:DownloadDir
 
+# hashtables holding information about discovered Java installations (full and feature version, architecture, JDK or JRE etc.)
+# ...for the default java.exe (first one on the PATH if any)
+$global:DefaultJavaFacts = $null
+# ...for the default javac.exe (first one on the PATH if any JDK)
+$global:DefaultJavaCompilerFacts = $null
+# ...for the installation referenced by JAVA_HOME in the user store
+$global:UserJavaHomeFacts = $null
+# ...for the installation referenced by JAVA_HOME in the system store
+$global:SystemJavaHomeFacts = $null
 
+# flag indicating if this script got restarted in an elevated (admin) shell
+$global:Elevated = $false
+
+# List of paths to Java installations that got removed/uninstalled
+$global:RemovedJavaHomes = @()
+
+# list of installed msis fetched from the registry (cf. Get-JavaInstallations)
+# ... at the beginning of script execution
+$global:InstalledSoftware
+
+# ... and at the end of script execution (filtered by OpenJDK installations)
+$global:NewInstalls = $null
+#endregion
+
+#region general helper methods
 function Test-CommandOnPath {
     Param ($command)
     $currentPref = $ErrorActionPreference
@@ -213,8 +239,29 @@ function Uninstall-InstalledSoftware {
         }
     }
 }
+#endregion
 
-$global:InstalledSoftware = $null
+#region permission helpers
+function Test-Elevated {
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-IsInLocalAdmins {
+    whoami /groups | Select-String -SimpleMatch 'S-1-5-32-544' -Quiet
+}
+
+function Restart-HostElevated {
+    $proc = Get-Process -Id $PID
+    $psExeArgs = @( '-File'; "`"${PSCommandPath}`"")
+    $params = @{ FilePath = $proc.Path; Verb = 'RunAs'; ArgumentList = $psExeArgs }
+
+    Start-Process @params
+    exit
+}
+#endregion
+
+#region Java helpers
 function Get-JavaInstallations {
     param([switch] $Refresh)
     # Since enumerating every installed application is somewhat expensive, we want to avoid calls to 'Get-InstalledSoftware' as much as possible
@@ -233,61 +280,6 @@ function Get-JavaInstallations {
         $openjdks = @()
     }
     return $oracle, $openjdks
-}
-
-function Get-TemurinInstaller {
-    Param(
-        [ValidateScript({ $_ -eq 'jdk' -or $_ -eq 'jre' })]
-        [string] $Package = 'jdk',
-        [ValidateScript({ $_ -eq 'x64' -or $_ -eq 'x86' })]
-        [string] $Arch = 'x64',
-        [parameter(Mandatory = $true)]
-        [int] $FeatureVersion,
-        [parameter(Mandatory = $true)]
-        [string] $TmpDir
-    )
-
-    $url = "${AdoptiumAPI}/v3/installer/latest/${FeatureVersion}/ga/windows/${Arch}/${Package}/hotspot/normal/eclipse"
-    $fileName = "temurin-${Flavor}-${FeatureVersion}.msi"
-    $outFile = [System.IO.Path]::Combine($TmpDir, $fileName)
-    
-    $status = curl.exe -s -w '%{http_code}' $url
-
-    if ($status -eq 307) {
-        curl.exe -s -L -o $outFile $url
-        if (-not $?) {
-            throw "Failed to download installer for Temurin Java ${FeatureVersion} ($($Package.ToUpperInvariant()))."
-        }
-    }
-    else {
-        throw "Failed to get download URL for Temurin Java ${FeatureVersion} ($($Package.ToUpperInvariant()))."
-    }
-
-    $outFile
-}
-
-function Install-Temurin {
-    Param(
-        [parameter(Mandatory = $true)]
-        [ValidateScript({ Test-Path $_ })]
-        [string] $MsiInstaller,
-        [ValidateScript({ $_ -eq 'x64' -or $_ -eq 'x86' })]
-        [string] $Arch,
-        [ValidateScript({ $_ -eq 'jdk' -or $_ -eq 'jre' })]
-        [string] $Package
-    )
-
-    Start-Process -Wait -Verb RunAs -FilePath 'msiexec' -ArgumentList '/i', "`"$MsiInstaller`"", '/quiet', '/norestart', '/qn'
-
-    # Unfortunately, msiexec might report success even if the package was in fact not installed. So we need to double check.
-    if ($?) {
-        $temurin = Get-InstalledSoftware | Where-Object { $_.AppName -and $_.AppName.Contains('Temurin') -and $_.AppName.Contains($Arch) -and $_.AppName.Contains($Package.ToUpperInvariant()) }
-        if ($temurin) {
-            return $true
-        }
-        return $false
-    }
-    return $false
 }
 
 function Get-JavaVersion {
@@ -316,6 +308,33 @@ function Get-JavaFeatureVersion {
     }
     else {
         [int]($components[0])
+    }
+}
+
+function Get-JavaVendor {
+    Param(
+        [string] $Exe
+    )
+    if ([System.IO.File]::Exists($Exe) -or $(Test-CommandOnPath $Exe)) {
+        $isOpenJDK = & $Exe -version 2>&1 | Select-String -SimpleMatch 'OpenJDK' -Quiet
+        if ($isOpenJDK) {
+            # We can try and find a more specific value.
+            $m = & $Exe -version 2>&1 | Select-Object -Skip 1 -First 1 | Select-String -Pattern '[a-zA-Z]+-([0-9]+[.]){2,}'
+            if ($m.Matches) {
+                $comp = $m.Matches.Value.Split('-')
+                if ($comp.Count -eq 2) {
+                    # promising
+                    return $comp[0]
+                }
+            }
+            return 'OpenJDK'
+        }
+        else {
+            return 'Oracle'
+        }
+    }
+    else {
+        throw "$Exe does not seem to exist (or is not a file)!"
     }
 }
 
@@ -388,11 +407,6 @@ function Test-DefaultIsJRE {
     }
 }
 
-function Test-HasCorretto {
-    $oracle, $openJDKs = Get-JavaInstallations
-    ($openJDKs | Where-Object { $_.AppName -and $_.AppName.Contains('Corretto') }).Count -gt 0
-}
-
 function Test-IsJDK {
     Param(
         [parameter(ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true, Mandatory = $true)]
@@ -403,33 +417,6 @@ function Test-IsJDK {
     $runtime = [System.IO.Path]::Combine($InstallLocation, 'bin\javac.exe')
 
     [System.IO.File]::Exists($compiler) -and [System.IO.File]::Exists($runtime)
-}
-
-function Get-JavaVendor {
-    Param(
-        [string] $Exe
-    )
-    if ([System.IO.File]::Exists($Exe) -or $(Test-CommandOnPath $Exe)) {
-        $isOpenJDK = & $Exe -version 2>&1 | Select-String -SimpleMatch 'OpenJDK' -Quiet
-        if ($isOpenJDK) {
-            # We can try and find a more specific value.
-            $m = & $Exe -version 2>&1 | Select-Object -Skip 1 -First 1 | Select-String -Pattern '[a-zA-Z]+-([0-9]+[.]){2,}'
-            if ($m.Matches) {
-                $comp = $m.Matches.Value.Split('-')
-                if ($comp.Count -eq 2) {
-                    # promising
-                    return $comp[0]
-                }
-            }
-            return 'OpenJDK'
-        }
-        else {
-            return 'Oracle'
-        }
-    }
-    else {
-        throw "$Exe does not seem to exist (or is not a file)!"
-    }
 }
 
 function Get-JavaHomeFacts {
@@ -462,17 +449,6 @@ function Get-JavaHomeFacts {
     return @{ Version = $ver; Feature = $feature; JDK = $isJDK; Vendor = $vendor; Arch = $arch; JavaHome = $JavaHome }
 }
 
-function Convert-JavaFacts {
-    Param(
-        [parameter(ValueFromPipeline = $true, Mandatory = $true)]
-        [hashtable] $JavaFacts
-    )
-
-    $package = if ($JavaFacts.JDK) { 'JDK' } else { 'JRE' }
-
-    return "$($JavaFacts.Vendor) ${package} $($JavaFacts.Feature) ($($JavaFacts.Version)) for $($JavaFacts.Arch)"
-}
-
 function Get-DefaultJavaFacts {
     $ver = Get-JavaVersion 'java.exe'
     $feature = Get-JavaFeatureVersion $ver
@@ -494,15 +470,19 @@ function Get-DefaultJavaFacts {
     return @{ Version = $ver; Feature = $feature; JDK = -not $isJRE; Vendor = $vendor; Arch = $arch; JavaHome = $javaHome }
 }
 
-function Test-Elevated {
-    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
+function Convert-JavaFacts {
+    Param(
+        [parameter(ValueFromPipeline = $true, Mandatory = $true)]
+        [hashtable] $JavaFacts
+    )
 
-function Test-IsInLocalAdmins {
-    whoami /groups | Select-String -SimpleMatch 'S-1-5-32-544' -Quiet
-}
+    $package = if ($JavaFacts.JDK) { 'JDK' } else { 'JRE' }
 
+    return "$($JavaFacts.Vendor) ${package} $($JavaFacts.Feature) ($($JavaFacts.Version)) for $($JavaFacts.Arch)"
+}
+#endregion
+
+#region user interaction helpers
 function Write-Title {
     Param(
         [string] $Message
@@ -617,7 +597,151 @@ function Receive-AnswerInfo {
         }
     }
 }
+#endregion
 
+#region OpenJDK helpers
+function Test-CanConnect {
+    curl.exe -s -I -o $null -f $AdoptiumAPI
+    return $?
+}
+
+function Get-TemurinInstaller {
+    Param(
+        [ValidateScript({ $_ -eq 'jdk' -or $_ -eq 'jre' })]
+        [string] $Package = 'jdk',
+        [ValidateScript({ $_ -eq 'x64' -or $_ -eq 'x86' })]
+        [string] $Arch = 'x64',
+        [parameter(Mandatory = $true)]
+        [int] $FeatureVersion,
+        [parameter(Mandatory = $true)]
+        [string] $TmpDir
+    )
+
+    $url = "${AdoptiumAPI}/v3/installer/latest/${FeatureVersion}/ga/windows/${Arch}/${Package}/hotspot/normal/eclipse"
+    $fileName = "temurin-${Flavor}-${FeatureVersion}.msi"
+    $outFile = [System.IO.Path]::Combine($TmpDir, $fileName)
+    
+    $status = curl.exe -s -w '%{http_code}' $url
+
+    if ($status -eq 307) {
+        curl.exe -s -L -o $outFile $url
+        if (-not $?) {
+            throw "Failed to download installer for Temurin Java ${FeatureVersion} ($($Package.ToUpperInvariant()))."
+        }
+    }
+    else {
+        throw "Failed to get download URL for Temurin Java ${FeatureVersion} ($($Package.ToUpperInvariant()))."
+    }
+
+    $outFile
+}
+
+function Install-Temurin {
+    Param(
+        [parameter(Mandatory = $true)]
+        [ValidateScript({ Test-Path $_ })]
+        [string] $MsiInstaller,
+        [ValidateScript({ $_ -eq 'x64' -or $_ -eq 'x86' })]
+        [string] $Arch,
+        [ValidateScript({ $_ -eq 'jdk' -or $_ -eq 'jre' })]
+        [string] $Package
+    )
+
+    Start-Process -Wait -Verb RunAs -FilePath 'msiexec' -ArgumentList '/i', "`"$MsiInstaller`"", '/quiet', '/norestart', '/qn'
+
+    # Unfortunately, msiexec might report success even if the package was in fact not installed. So we need to double check.
+    if ($?) {
+        $temurin = Get-InstalledSoftware | Where-Object { $_.AppName -and $_.AppName.Contains('Temurin') -and $_.AppName.Contains($Arch) -and $_.AppName.Contains($Package.ToUpperInvariant()) }
+        if ($temurin) {
+            return $true
+        }
+        return $false
+    }
+    return $false
+}
+
+function Test-HasCorretto {
+    $oracle, $openJDKs = Get-JavaInstallations
+    ($openJDKs | Where-Object { $_.AppName -and $_.AppName.Contains('Corretto') }).Count -gt 0
+}
+#endregion
+
+#region remove and replace Oracle installs
+function _nukeOracleJavas {
+    Param(
+        [Object[]] $Candidates
+    )
+
+    Write-Subtitle 'Removal' 'Uninstalling Oracle Javas'
+    foreach ($morturi in $Candidates) {
+        $facts = Get-JavaHomeFacts $morturi.InstallLocation
+        Write-Host "Uninstalling $($facts | Convert-JavaFacts). Please be patient. This might take a while."
+        
+        $rv = Uninstall-InstalledSoftware $morturi.AppGUID
+        if ($rv -ne 0) {
+            Write-Host -ForegroundColor Red "Failed to uninstall $($facts | Convert-JavaFacts)!"
+        }
+        else {
+            Write-Host -ForegroundColor Green "Uninstalled $($facts | Convert-JavaFacts)!"
+            $global:RemovedJavaHomes += $facts.JavaHome
+        }
+    }
+}
+
+function _downloadAndInstall {
+    Param(
+        [string] $Arch,
+        [string] $Package,
+        [int] $FeatureVersion
+    )
+
+    while ($true) {
+        try {
+            $installer = Get-TemurinInstaller -Package $Package -Arch $Arch -FeatureVersion $FeatureVersion -TmpDir $global:DownloadDir
+            break
+        }
+        catch {
+            Write-Host -ForegroundColor Red $_
+            if (-not (Receive-Answer 'Do you want to try again?')) {
+                Write-Host 'Giving up!'
+                return $false
+            }
+        }
+    }
+
+    Write-Host "Installing Temurin $($Package.ToUpperInvariant()) ${FeatureVersion}."
+    while ($true) {
+        if (-not (Install-Temurin -MsiInstaller $installer -Arch $Arch -Package $Package)) {
+            Write-Host -ForegroundColor Red "Failed to install Temurin $($Package.ToUpperInvariant())!"
+            if (-not (Receive-Answer 'Do you want to try again?')) {
+                Write-Host 'Giving up!'
+                return $false
+            }
+        }
+        else {
+            Write-Host -ForegroundColor Green "Temurin $($Package.ToUpperInvariant()) successfully installed!"
+            return $true
+        }
+    }
+}
+
+function _checkAndDownloadTemurinJRE {
+    Param(
+        [string] $Arch,
+        [int] $FeatureVersion,
+        [Object[]] $Installs
+    )
+
+    Write-Host "Checking if Temurin JRE ($(if ($Arch -eq 'x64') { '64-bit' } else { '32-bit' })) or other equivalent OpenJDK is already installed."
+    if ($Installs.Count -gt 0) {
+        Write-Host -ForegroundColor Green 'Found! Skipping download and installation.'
+        return $true
+    }
+    else {
+        Write-Host -ForegroundColor Yellow 'Not found! Will download and install Temurin JRE. (Please be patient.)'
+        _downloadAndInstall -Arch $Arch -Package 'jre' -FeatureVersion $FeatureVersion
+    }   
+}
 function _dealWithJDKs {
     # JDKs
     Write-Title 'Java Development Kits (JDKs)'
@@ -833,123 +957,20 @@ function _dealWithJRE {
 
     Write-Host ''
 }
+#endregion
 
-$global:RemovedJavaHomes = @()
-function _nukeOracleJavas {
-    Param(
-        [Object[]] $Candidates
-    )
+#region pre checks
+function _precheckPSVersion {
+    Write-Subtitle 'PowerShell' 'Checking if we are running in PowerShell version 5 or later.'
 
-    Write-Subtitle 'Removal' 'Uninstalling Oracle Javas'
-    foreach ($morturi in $Candidates) {
-        $facts = Get-JavaHomeFacts $morturi.InstallLocation
-        Write-Host "Uninstalling $($facts | Convert-JavaFacts). Please be patient. This might take a while."
-        
-        $rv = Uninstall-InstalledSoftware $morturi.AppGUID
-        if ($rv -ne 0) {
-            Write-Host -ForegroundColor Red "Failed to uninstall $($facts | Convert-JavaFacts)!"
-        }
-        else {
-            Write-Host -ForegroundColor Green "Uninstalled $($facts | Convert-JavaFacts)!"
-            $global:RemovedJavaHomes += $facts.JavaHome
-        }
-    }
-}
-
-function _downloadAndInstall {
-    Param(
-        [string] $Arch,
-        [string] $Package,
-        [int] $FeatureVersion
-    )
-
-    while ($true) {
-        try {
-            $installer = Get-TemurinInstaller -Package $Package -Arch $Arch -FeatureVersion $FeatureVersion -TmpDir $global:DownloadDir
-            break
-        }
-        catch {
-            Write-Host -ForegroundColor Red $_
-            if (-not (Receive-Answer 'Do you want to try again?')) {
-                Write-Host 'Giving up!'
-                return $false
-            }
-        }
-    }
-
-    Write-Host "Installing Temurin $($Package.ToUpperInvariant()) ${FeatureVersion}."
-    while ($true) {
-        if (-not (Install-Temurin -MsiInstaller $installer -Arch $Arch -Package $Package)) {
-            Write-Host -ForegroundColor Red "Failed to install Temurin $($Package.ToUpperInvariant())!"
-            if (-not (Receive-Answer 'Do you want to try again?')) {
-                Write-Host 'Giving up!'
-                return $false
-            }
-        }
-        else {
-            Write-Host -ForegroundColor Green "Temurin $($Package.ToUpperInvariant()) successfully installed!"
-            return $true
-        }
-    }
-}
-
-function _checkAndDownloadTemurinJRE {
-    Param(
-        [string] $Arch,
-        [int] $FeatureVersion,
-        [Object[]] $Installs
-    )
-
-    Write-Host "Checking if Temurin JRE ($(if ($Arch -eq 'x64') { '64-bit' } else { '32-bit' })) or other equivalent OpenJDK is already installed."
-    if ($Installs.Count -gt 0) {
-        Write-Host -ForegroundColor Green 'Found! Skipping download and installation.'
-        return $true
-    }
-    else {
-        Write-Host -ForegroundColor Yellow 'Not found! Will download and install Temurin JRE. (Please be patient.)'
-        _downloadAndInstall -Arch $Arch -Package 'jre' -FeatureVersion $FeatureVersion
-    }   
-}
-
-function _precheckCurl {
-    Write-Subtitle 'cURL' 'Checking if curl.exe is available'
-
-    if (Test-CommandOnPath 'curl.exe') {
-        Write-Host -ForegroundColor Green "Splendid! curl.exe is available!"
-        Write-Host ''
-    }
-    else {
-        Write-Host -ForegroundColor Red "curl.exe could not be found!`r`n"
-        Write-Host -ForegroundColor Yellow @"
-Microsoft ships curl.exe with Windows 10 and 11 since 2017, however it looks like it is not available on
-your computer. curl.exe is required to download Temurin installers and this script cannot function without
-it.
-
-I suggest that you head over to https://curl.se/windows/ and grab the current version for Windows. Once
-installed, you may re-run this script.
-
-Bye for now!
-"@
+    if ($PSVersionTable.PSVersion.Major -lt 5) {
+        Write-Host -ForegroundColor Red "This script requires at least PowerShell version 5 to run, but this is version $($PSVersionTable.PSVersion.Major)!"
+        Write-Host 'Exiting.'
         exit
     }
-}
-
-#region pre-checks
-function _precheckConnectivity {
-    Write-Subtitle 'Connectivity' "Trying to reach the Adoptium API at ${AdoptiumAPI}"
-    if (Test-CanConnect) {
-        Write-Host -ForegroundColor Green "Excellent! Adoptium API is responding!`r`n"
-    }
     else {
-        Write-Host -ForegroundColor Red 'Failed to connect!'
+        Write-Host -ForegroundColor Green "All good. Looks like this is PowerShell version $($PSVersionTable.PSVersion.Major)!"
         Write-Host ''
-        Write-Host -ForegroundColor Yellow @"
-Trying to connect to ${AdoptiumAPI} resulted in an error. This script requires an active Internet connection to
-proceed. Please verify that your machine is connected to the Internet and that ${AdoptiumAPI} can be reached.
-"@
-        Write-Host ''
-        Write-Host 'Exiting now!'
-        exit
     }
 }
 
@@ -993,44 +1014,28 @@ If not you better stop now and ask an admin for help.
     }
 }
 
-function _precheckPSVersion {
-    Write-Subtitle 'PowerShell' 'Checking if we are running in PowerShell version 5 or later.'
+function _precheckCurl {
+    Write-Subtitle 'cURL' 'Checking if curl.exe is available'
 
-    if ($PSVersionTable.PSVersion.Major -lt 5) {
-        Write-Host -ForegroundColor Red "This script requires at least PowerShell version 5 to run, but this is version $($PSVersionTable.PSVersion.Major)!"
-        Write-Host 'Exiting.'
-        exit
-    }
-    else {
-        Write-Host -ForegroundColor Green "All good. Looks like this is PowerShell version $($PSVersionTable.PSVersion.Major)!"
+    if (Test-CommandOnPath 'curl.exe') {
+        Write-Host -ForegroundColor Green "Splendid! curl.exe is available!"
         Write-Host ''
     }
-}
-
-function _precheckCorretto {
-    # Amazon Corretto
-    Write-Subtitle 'Corretto' 'Checking if Amazon Corretto OpenJDK is installed.'
-    if (Test-HasCorretto) {
-        Write-CorrettoWarning
-        if (Receive-Answer 'Do you want to stop now?') {
-            Write-Host 'Fair enough. Bye!'
-            Exit
-        }
-        else {
-            Write-Host "Cool! Let's continue."
-        }
-    }
     else {
-        Write-Host -ForegroundColor Green 'No Corretto installations found.'
-    }
-    Write-Host ''
-}
+        Write-Host -ForegroundColor Red "curl.exe could not be found!`r`n"
+        Write-Host -ForegroundColor Yellow @"
+Microsoft ships curl.exe with Windows 10 and 11 since 2017, however it looks like it is not available on
+your computer. curl.exe is required to download Temurin installers and this script cannot function without
+it.
 
-# because on Windows installation sequence matters, we must remember which Java version is the default.
-$global:DefaultJavaCompilerFacts = $null
-$global:DefaultJavaFacts = $null
-$global:UserJavaHomeFacts = $null
-$global:SystemJavaHomeFacts = $null
+I suggest that you head over to https://curl.se/windows/ and grab the current version for Windows. Once
+installed, you may re-run this script.
+
+Bye for now!
+"@
+        exit
+    }
+}
 
 function _precheckDefaultJava {
     Write-Subtitle 'Default Installation' 'Looking for a default Java installation and checking JAVA_HOME.'
@@ -1083,6 +1088,43 @@ function _precheckDefaultJava {
     Write-Host ''
 }
 
+function _precheckConnectivity {
+    Write-Subtitle 'Connectivity' "Trying to reach the Adoptium API at ${AdoptiumAPI}"
+    if (Test-CanConnect) {
+        Write-Host -ForegroundColor Green "Excellent! Adoptium API is responding!`r`n"
+    }
+    else {
+        Write-Host -ForegroundColor Red 'Failed to connect!'
+        Write-Host ''
+        Write-Host -ForegroundColor Yellow @"
+Trying to connect to ${AdoptiumAPI} resulted in an error. This script requires an active Internet connection to
+proceed. Please verify that your machine is connected to the Internet and that ${AdoptiumAPI} can be reached.
+"@
+        Write-Host ''
+        Write-Host 'Exiting now!'
+        exit
+    }
+}
+
+function _precheckCorretto {
+    # Amazon Corretto
+    Write-Subtitle 'Corretto' 'Checking if Amazon Corretto OpenJDK is installed.'
+    if (Test-HasCorretto) {
+        Write-CorrettoWarning
+        if (Receive-Answer 'Do you want to stop now?') {
+            Write-Host 'Fair enough. Bye!'
+            Exit
+        }
+        else {
+            Write-Host "Cool! Let's continue."
+        }
+    }
+    else {
+        Write-Host -ForegroundColor Green 'No Corretto installations found.'
+    }
+    Write-Host ''
+}
+
 function _prechecks {
     Write-Title 'Initial Checks'
     _precheckPSVersion
@@ -1092,7 +1134,9 @@ function _prechecks {
     _precheckConnectivity
     _precheckCorretto
 }
+#endregion
 
+#region post checks
 function Test-GotKilled {
     param([string] $JavaHome)
 
@@ -1120,18 +1164,6 @@ function Test-CompilerGotKilled {
     }
 }
 
-
-$global:Elevated = $false
-function Restart-HostElevated {
-    $proc = Get-Process -Id $PID
-    $psExeArgs = @( '-File'; "`"${PSCommandPath}`"")
-    $params = @{ FilePath = $proc.Path; Verb = 'RunAs'; ArgumentList = $psExeArgs }
-
-    Start-Process @params
-    exit
-}
-
-$global:NewInstalls = $null
 function Find-ReplacementJavaHome {
 
     param([hashtable] $Facts)
@@ -1298,13 +1330,9 @@ function _postCleanup {
     _postFixJavaHome
     _postFixPath
 }
-
-function Test-CanConnect {
-    curl.exe -s -I -o $null -f $AdoptiumAPI
-    return $?
-}
 #endregion
 
+#region main
 try {
     _prechecks
     $global:DownloadDir = New-TempDir
@@ -1321,4 +1349,4 @@ finally {
 if (-not $global:Elevated) {
     Read-Host -Prompt "`r`nWe are done. Press <Return> to close this window"
 }
-
+#endregion
