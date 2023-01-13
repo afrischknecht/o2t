@@ -1,4 +1,5 @@
 Set-Variable -Name AdoptiumAPI -Option Constant -Value 'https://api.adoptium.net'
+$global:DownloadDir
 
 
 function Test-CommandOnPath {
@@ -215,8 +216,9 @@ function Uninstall-InstalledSoftware {
 
 $global:InstalledSoftware = $null
 function Get-JavaInstallations {
+    param([switch] $Refresh)
     # Since enumerating every installed application is somewhat expensive, we want to avoid calls to 'Get-InstalledSoftware' as much as possible
-    if (-not $global:InstalledSoftware) {
+    if (-not $global:InstalledSoftware -or $Refresh) {
         $global:InstalledSoftware = Get-InstalledSoftware
     }
 
@@ -397,8 +399,8 @@ function Test-IsJDK {
         [string] $InstallLocation
     )
 
-    $compiler = "${InstallLocation}\bin\javac.exe"
-    $runtime = "${InstallLocation}\bin\java.exe"
+    $compiler = [System.IO.Path]::Combine($InstallLocation, 'bin\javac.exe')
+    $runtime = [System.IO.Path]::Combine($InstallLocation, 'bin\javac.exe')
 
     [System.IO.File]::Exists($compiler) -and [System.IO.File]::Exists($runtime)
 }
@@ -440,11 +442,12 @@ function Get-JavaHomeFacts {
         return @{ Version = '0.0.0'; Feature = 0; JDK = $false; Vendor = $null; Arch = $null; JavaHome = $JavaHome }
     }
 
-    $ver = Get-JavaVersion "${JavaHome}\bin\java.exe"
+    $javaExe = [System.IO.Path]::Combine($JavaHome, 'bin\java.exe')
+    $ver = Get-JavaVersion $javaExe
     $feature = Get-JavaFeatureVersion $ver
     $isJDK = Test-IsJDK $JavaHome
-    $vendor = Get-JavaVendor "${JavaHome}\bin\java.exe"
-    $bitness = Get-Bitness "${JavaHome}\bin\java.exe"
+    $vendor = Get-JavaVendor $javaExe
+    $bitness = Get-Bitness $javaExe
 
     if ($bitness -eq 32) {
         $arch = 'x86'
@@ -515,8 +518,8 @@ function Write-Subtitle {
         [string] $Message
     )
 
-    Write-Host -NoNewline "${Title}: "
-    Write-Host -ForegroundColor DarkGray $Message
+    Write-Host -ForegroundColor DarkGray -NoNewline "${Title}: "
+    Write-Host -ForegroundColor Gray $Message
 }
 
 function Write-AncientVersionWarning {
@@ -525,11 +528,12 @@ function Write-AncientVersionWarning {
     )
 
     Write-Host -ForegroundColor Yellow @"
-It looks like you have Oracle Java 6 or older installed. Note that this Java version is very old, is no longer supported, and hasn't
-received any updates in years. Unless you have it on your machine for specific reasons (e.g. to run a piece of legacy software) it is
-highly recommended to switch to a supported version of Java. 
+It looks like you have Oracle Java 6 or older installed. Note that this Java version is very old, is no longer
+supported, and hasn't received any updates in years. Unless you have it on your machine for specific reasons
+(e.g. to run a piece of legacy software) it is highly recommended to switch to a supported version of Java. 
 
-Temurin does not provide compatible OpenJDK builds for Java 6 or older. Therefore ${ActionMessage}.
+Temurin does not provide compatible OpenJDK builds for Java 6 or older.
+Therefore ${ActionMessage}.
 
 "@
 }
@@ -537,8 +541,8 @@ Temurin does not provide compatible OpenJDK builds for Java 6 or older. Therefor
 function Write-DeprecatedVersionInfo {
 
     Write-Host -ForegroundColor Yellow @"
-Java 7 is no longer supported and Temurin does not provide builds for it. Replacing it with Java 8 is likely a safe and sane option.
-That said, there is a slim chance that some older Java applications will not run properly under Java 8.
+Java 7 is no longer supported and Temurin does not provide builds for it. Replacing it with Java 8 is likely a safe
+and sane option. That said, there is a slim chance that some older Java applications will not run properly under Java 8.
 
 "@
 
@@ -547,33 +551,34 @@ That said, there is a slim chance that some older Java applications will not run
 function Write-JREInfo {
     Write-Host @"
 
-It seems that you have at least one version of Oracle JRE installed. Apart from the JVM, Oracle's JRE ships with two components that
-never have been open-sourced:
+It seems that you have at least one version of Oracle JRE installed. Apart from the JVM, Oracle's JRE ships with two
+components that never have been open-sourced:
 
   • support for Java applets (run Java applications inside a browser)
   • support for Java Web Start (start Java applications from within a browser)
 
-As Temurin JRE cannot include these proprietary extensions, it is not a 1:1 replacement for Oracle. That said, Java applets are deprecated
-for a long time and it is unlikely that you still need this functionality.
+As Temurin JRE cannot include these proprietary extensions, it is not a 1:1 replacement for Oracle. That said, Java
+applets are deprecated for a long time and it is unlikely that you still need this functionality.
 
-Java Web Start is deprecated too as of Java 9, however it is still used sometimes. If you still need support for Java Web Start, I would
-recommend that you check out Open Web Start (https://openwebstart.com/) which offers an open source replacement for Java Web Start.
+Java Web Start is deprecated too as of Java 9, however it is still used sometimes. If you still need support for
+Java Web Start, I would recommend that you check out Open Web Start (https://openwebstart.com/) which offers an
+open source replacement for Java Web Start.
 
-If you don't care about applets or Web Start and just have the JRE installed because you want a Java runtime without any of the developer
-tools, replacing Oracle JRE with Temurin is a reasonable choice.
+If you don't care about applets or Web Start and just have the JRE installed because you want a Java runtime without
+any of the developer tools, replacing Oracle JRE with Temurin is a reasonable choice.
 
 "@
 }
 
 function Write-CorrettoWarning {
     Write-Host -ForegroundColor Yellow @"
-It seems that you have at least one version of Amazon Corretto installed. Because Corretto makes it annoyingly hard to determine its
-install location, this script will ignore Corretto installations for the most part. There is now real harm in it, but you might end
-up with some extra Temurin JDKs although Corretto could be used. Also, the default Java might get switched to Temurin if it was
-Corretto before.
+It seems that you have at least one version of Amazon Corretto installed. Because Corretto makes it annoyingly hard
+to determine its install location, this script will ignore Corretto installations for the most part. There is now
+real harm in it, but you might end up with some extra Temurin JDKs although Corretto could be used. Also, the default
+Java might get switched to Temurin if it was Corretto before.
 
-If you like your Corretto, then I suggest to stop now. If on the other hand, you think that Temurin is cool too (or you don't care)
-you may safely continue.
+If you like your Corretto, then I suggest to stop now. If on the other hand, you think that Temurin is cool too
+(or you don't care) you may safely continue.
 "@
 }
 
@@ -629,12 +634,12 @@ function _dealWithJDKs {
 
     foreach ($oj in $openJDKs) {
         $facts = Get-JavaHomeFacts $oj.InstallLocation
-        Write-Host -ForegroundColor Green "Found $($facts | Convert-JavaFacts)!"
-        Write-Host ''
+        Write-Host -ForegroundColor Green "- Found $($facts | Convert-JavaFacts)!"
         $key = "$($facts.Feature)-$($facts.Arch)"
         $availableFeatureVersions[$key] = $facts
     }
 
+    Write-Host ''
     Write-Subtitle 'Oracle JDKs' 'Looking for Oracle JDK installations on the system.'
     $oracleJDKs = $allOracle | Where-Object { $_.AppName.Contains("Develop") }
     if (-not $oracleJDKs) {
@@ -697,7 +702,7 @@ function _dealWithJDKs {
             $jdkFeature = 8
         }
 
-        Write-Host "‣ Checking if a replacement JDK for $($facts | Convert-JavaFacts) is already installed."
+        Write-Host "Checking if a replacement JDK for $($facts | Convert-JavaFacts) is already installed."
         $key = "${jdkFeature}-$($facts.Arch)"
         $replacementExists = $availableFeatureVersions.ContainsKey($key)
 
@@ -811,7 +816,7 @@ function _dealWithJRE {
         if ($needX64JRE) {
             if (_checkAndDownloadTemurinJRE 'x64' 8 $openJREsX64) {
                 Write-Host ''
-                $canNukeX64
+                $canNukeX64 = $true
             }
         }
 
@@ -838,7 +843,7 @@ function _nukeOracleJavas {
     Write-Subtitle 'Removal' 'Uninstalling Oracle Javas'
     foreach ($morturi in $Candidates) {
         $facts = Get-JavaHomeFacts $morturi.InstallLocation
-        Write-Host "‣ Uninstalling $($facts | Convert-JavaFacts). Please be patient. This might take a while."
+        Write-Host "Uninstalling $($facts | Convert-JavaFacts). Please be patient. This might take a while."
         
         $rv = Uninstall-InstalledSoftware $morturi.AppGUID
         if ($rv -ne 0) {
@@ -860,7 +865,7 @@ function _downloadAndInstall {
 
     while ($true) {
         try {
-            $installer = Get-TemurinInstaller -Package $Package -Arch $Arch -FeatureVersion $FeatureVersion -TmpDir $tdir
+            $installer = Get-TemurinInstaller -Package $Package -Arch $Arch -FeatureVersion $FeatureVersion -TmpDir $global:DownloadDir
             break
         }
         catch {
@@ -872,7 +877,7 @@ function _downloadAndInstall {
         }
     }
 
-    Write-Host "‣ Installing Temurin $($Package.ToUpperInvariant()) ${FeatureVersion}."
+    Write-Host "Installing Temurin $($Package.ToUpperInvariant()) ${FeatureVersion}."
     while ($true) {
         if (-not (Install-Temurin -MsiInstaller $installer -Arch $Arch -Package $Package)) {
             Write-Host -ForegroundColor Red "Failed to install Temurin $($Package.ToUpperInvariant())!"
@@ -895,7 +900,7 @@ function _checkAndDownloadTemurinJRE {
         [Object[]] $Installs
     )
 
-    Write-Host "‣ Checking if Temurin JRE ($(if ($Arch -eq 'x64') { '64-bit' } else { '32-bit' })) or other equivalent OpenJDK is already installed."
+    Write-Host "Checking if Temurin JRE ($(if ($Arch -eq 'x64') { '64-bit' } else { '32-bit' })) or other equivalent OpenJDK is already installed."
     if ($Installs.Count -gt 0) {
         Write-Host -ForegroundColor Green 'Found! Skipping download and installation.'
         return $true
@@ -904,6 +909,29 @@ function _checkAndDownloadTemurinJRE {
         Write-Host -ForegroundColor Yellow 'Not found! Will download and install Temurin JRE. (Please be patient.)'
         _downloadAndInstall -Arch $Arch -Package 'jre' -FeatureVersion $FeatureVersion
     }   
+}
+
+function _precheckCurl {
+    Write-Subtitle 'cURL' 'Checking if curl.exe is available'
+
+    if (Test-CommandOnPath 'curl.exe') {
+        Write-Host -ForegroundColor Green "Splendid! curl.exe is available!"
+        Write-Host ''
+    }
+    else {
+        Write-Host -ForegroundColor Red "curl.exe could not be found!`r`n"
+        Write-Host -ForegroundColor Yellow @"
+Microsoft ships curl.exe with Windows 10 and 11 since 2017, however it looks like it is not available on
+your computer. curl.exe is required to download Temurin installers and this script cannot function without
+it.
+
+I suggest that you head over to https://curl.se/windows/ and grab the current version for Windows. Once
+installed, you may re-run this script.
+
+Bye for now!
+"@
+        exit
+    }
 }
 
 #region pre-checks
@@ -916,8 +944,8 @@ function _precheckConnectivity {
         Write-Host -ForegroundColor Red 'Failed to connect!'
         Write-Host ''
         Write-Host -ForegroundColor Yellow @"
-Trying to connect to ${AdoptiumAPI} resulted in an error. This script requires an active Internet connection to proceed.
-Please verify that your machine is connected to the Internet and that ${AdoptiumAPI} can be reached.
+Trying to connect to ${AdoptiumAPI} resulted in an error. This script requires an active Internet connection to
+proceed. Please verify that your machine is connected to the Internet and that ${AdoptiumAPI} can be reached.
 "@
         Write-Host ''
         Write-Host 'Exiting now!'
@@ -927,15 +955,19 @@ Please verify that your machine is connected to the Internet and that ${Adoptium
 
 function _precheckShellElevation {
     Write-Subtitle 'Admin Rights' 'Checking if we are running in an elevated shell.'
-    if (Test-Elevated) {
-        Write-Host -ForegroundColor Green "Swell! It looks like we are running in an elevated command prompt!`r`n"
-    }
-    elseif (Test-IsInLocalAdmins) { # TODO: Cannot change env vars if required (post)!
-        Write-Host -ForegroundColor DarkGreen @"
-Great! It looks like your account is a local admin. It is possible that you will see a bunch of UAC prompts along the way.
-If you don't feel like clicking, consider re-running this script in an elevated PowerShell prompt.
 
+    $restartRequired = $false
+    if (Test-Elevated) {
+        Write-Host -ForegroundColor Green "Swell! It looks like we are running in an elevated shell!`r`n"
+    }
+    elseif (Test-IsInLocalAdmins) {
+        Write-Host -ForegroundColor DarkGreen @"
+Great! It looks like your account is a local admin. Yet we are not running in an elevated prompt. This script requires
+admin privileges to install and uninstall software and modify environment variables if need be.
+
+Therefore I will try and switch to an elevated shell now if you allow. If not, execution has to stop here.
 "@
+        $restartRequired = $true
     }
     else {
         Write-Host -ForegroundColor Yellow @"
@@ -943,16 +975,35 @@ Warning! Could not determine if your account has local admin rights. It is possi
 inherits the right indirectly via AD group membership. However determining this is beyond the capabilities of this
 little script.
 
-To make everything crystal clear, it is recommended to stop now and re-run the script in an elevated PowerShell prompt.
-
+If you know that you are admin (or if you know the credentials of a local admin account on the system), you may go on.
+If not you better stop now and ask an admin for help.
 "@
-        if (Receive-Answer 'Do you want to stop now?') {
+        $restartRequired = $true
+    }
+
+    if ($restartRequired) {
+        $global:Elevated = $true
+        if (Receive-Answer "Attempt restart in an elevated shell? (Script will stop if answer is 'n'.)") {
+            Restart-HostElevated
+        }
+        else {
             Write-Host 'Okay. See you later!'
             exit
         }
-        else {
-            Write-Host "Fine. We'll continue. But if I fail it is on you!`r`n"
-        }
+    }
+}
+
+function _precheckPSVersion {
+    Write-Subtitle 'PowerShell' 'Checking if we are running in PowerShell version 5 or later.'
+
+    if ($PSVersionTable.PSVersion.Major -lt 5) {
+        Write-Host -ForegroundColor Red "This script requires at least PowerShell version 5 to run, but this is version $($PSVersionTable.PSVersion.Major)!"
+        Write-Host 'Exiting.'
+        exit
+    }
+    else {
+        Write-Host -ForegroundColor Green "All good. Looks like this is PowerShell version $($PSVersionTable.PSVersion.Major)!"
+        Write-Host ''
     }
 }
 
@@ -976,7 +1027,7 @@ function _precheckCorretto {
 }
 
 # because on Windows installation sequence matters, we must remember which Java version is the default.
-
+$global:DefaultJavaCompilerFacts = $null
 $global:DefaultJavaFacts = $null
 $global:UserJavaHomeFacts = $null
 $global:SystemJavaHomeFacts = $null
@@ -987,38 +1038,46 @@ function _precheckDefaultJava {
     $ver = Get-JavaVersion 'java.exe'
     if ($ver -ne '0.0.0') {
         $global:DefaultJavaFacts = Get-DefaultJavaFacts
-        Write-Host "‣ It looks like at least one version of Java is installed: $($DefaultJavaFacts | Convert-JavaFacts)"
+        Write-Host "- It looks like at least one version of Java is installed: $($DefaultJavaFacts | Convert-JavaFacts)"
+
+        if (-not $global:DefaultJavaFacts.JDK -and (Test-CommandOnPath 'javac.exe')) {
+            $javacFeatureVersion = Get-JavaVersion 'javac.exe' | Get-JavaFeatureVersion
+            $javacArch = if (64 -eq (Get-Bitness (Get-Command 'java.exe').Source)) { 'x64' } else { 'x86' }
+            $compilerPath = (Get-Command 'javac.exe').Source
+            $global:DefaultJavaCompilerFacts = @{ Arch = $javacArch; JDK = $true; Feature = $javacFeatureVersion; CompilerPath = $compilerPath; }
+        }
 
         if ($global:DefaultJavaFacts.Feature -lt 7) {
+            # TODO: Right decision? We could probably continue...
             Write-AncientVersionWarning 'execution of this script will now stop'
             Exit
         }
         
     }
     else {
-        Write-Host "‣ Could not find a default Java installation."
+        Write-Host "Could not find a default Java installation."
     }
 
     $jhome = Get-JavaHomeVar
     if ($jhome.Count -gt 0) {
         if ($jhome.ContainsKey('System') -and -not $jhome.ContainsKey('User')) {
-            Write-Host "‣ It looks like a system-wide environment variable JAVA_HOME is set and it is pointing to $($jhome['System'])"
+            Write-Host "- It looks like a system-wide environment variable JAVA_HOME is set and is pointing to:  $($jhome['System'])"
             $global:SystemJavaHomeFacts = Get-JavaHomeFacts $jhome['System']
         }
         elseif ($jhome.ContainsKey('User') -and -not $jhome.ContainsKey('System')) {
-            Write-Host "‣ It looks like the user-specific environment variable JAVA_HOME is set and it is pointing to $($jhome['User'])"
+            Write-Host "- It looks like the user-specific environment variable JAVA_HOME is set and is pointing to:  $($jhome['User'])"
             $global:UserJavaHomeFacts = Get-JavaHomeFacts $jhome['User']
         }
         else {
             # System has both system-wide and per-user JAVA_HOME set.
-            Write-Host "‣ It looks like a system-wide environment variable JAVA_HOME is set and it is pointing to $($jhome['System'])"
-            Write-Host "‣ In addition, a user-specific variable is set (overriding the system-wide variable) and is pointing to $($jhome['User'])"
+            Write-Host "- It looks like a system-wide environment variable JAVA_HOME is set and is pointing to:  $($jhome['System'])"
+            Write-Host "  In addition, a user-specific variable is set (overriding the system-wide variable) and is pointing to:`r`n  $($jhome['User'])"
             $global:UserJavaHomeFacts = Get-JavaHomeFacts $jhome['User']
             $global:SystemJavaHomeFacts = Get-JavaHomeFacts $jhome['System']
         }
     }
     else {
-        Write-Host '‣ It seems that the environment variable JAVA_HOME is not set.'
+        Write-Host 'It seems that the environment variable JAVA_HOME is not set.'
     }
 
     Write-Host ''
@@ -1026,8 +1085,10 @@ function _precheckDefaultJava {
 
 function _prechecks {
     Write-Title 'Initial Checks'
-    _precheckDefaultJava
+    _precheckPSVersion
     _precheckShellElevation
+    _precheckCurl
+    _precheckDefaultJava
     _precheckConnectivity
     _precheckCorretto
 }
@@ -1035,9 +1096,11 @@ function _prechecks {
 function Test-GotKilled {
     param([string] $JavaHome)
 
+    Write-Debug "Checking if $JavaHome is in the victims' list"
     foreach ($victim in $global:RemovedJavaHomes) {
+        Write-Debug "Found victim $victim"
         # Doing it this way because of nested 'jre' folders
-        if ($JavaHome.StartsWith($victim) -or $victim.StartsWith($JavaHome) -or $victim -eq $JavaHome) {
+        if ($JavaHome.StartsWith($victim) -or $victim.StartsWith($JavaHome)) {
             return $true
         } 
     }
@@ -1045,70 +1108,109 @@ function Test-GotKilled {
     return $false
 }
 
+function Test-CompilerGotKilled {
+    param([string] $CompilerPath)
+
+    if ($CompilerPath.Contains('Common Files')) {
+        # This is the shim...
+        return -not (Test-Path $CompilerPath)
+    }
+    else {
+        return Test-GotKilled $CompilerPath
+    }
+}
+
+
+$global:Elevated = $false
+function Restart-HostElevated {
+    $proc = Get-Process -Id $PID
+    $psExeArgs = @( '-File'; "`"${PSCommandPath}`"")
+    $params = @{ FilePath = $proc.Path; Verb = 'RunAs'; ArgumentList = $psExeArgs }
+
+    Start-Process @params
+    exit
+}
+
 $global:NewInstalls = $null
 function Find-ReplacementJavaHome {
 
-    param([bool] $PerUser = $false)
+    param([hashtable] $Facts)
+
+    Write-Debug "Looking for replacement for: $($Facts.Feature), $($Facts.Arch), JDK: $($Facts.JDK)"
 
     if (-not $global:NewInstalls) {
-        $oracle, $openjdk = Get-JavaInstallations
+        $oracle, $openjdk = Get-JavaInstallations -Refresh
         $global:NewInstalls = $openjdk | Where-Object { $_.InstallLocation }
     }
 
     $cand = $null
-    $facts = if ($PerUser) { $global:UserJavaHomeFacts } else { $global:SystemJavaHomeFacts }
-    Write-Host "Required: $($facts.Feature), $($facts.Arch), $($facts.JDK)"
     foreach ($java in $global:NewInstalls) {
         $f = Get-JavaHomeFacts $java.InstallLocation
-        Write-Host "Considering: $($f.Feature), $($f.Arch), $($f.JDK)"
-        if ($f.Feature -eq $facts.Feature -and $f.Arch -eq $facts.Arch -and $f.JDK -eq $facts.JDK) {
+        Write-Debug "Considering: $($Facts.Feature), $($Facts.Arch), JDK: $($Facts.JDK)"
+        if ($f.Feature -eq $Facts.Feature -and $f.Arch -eq $Facts.Arch -and $f.JDK -eq $Facts.JDK) {
             $cand = $f.JavaHome
             break
         }
     }
+
+    if (-not $cand -and -not $Facts.JDK) {
+        # If we are looking for a replacement for a JRE, we can retry and see if there is a JDK that fits.
+        foreach ($java in $global:NewInstalls) {
+            $f = Get-JavaHomeFacts $java.InstallLocation
+
+            if ($f.Feature -eq $Facts.Feature -and $f.Arch -eq $Facts.Arch) {
+                $cand = $f.JavaHome
+                break
+            }
+        }
+    }
+
     return $cand
 }
 
 function _postFixJavaHome {
     Write-Subtitle 'JAVA_HOME' 'Checking if it needs updating'
-    $oracle, $openjdk = Get-JavaInstallations
 
     if ($global:SystemJavaHomeFacts) {
-        Write-Host '‣ Checking system-wide JAVA_HOME.'
+        Write-Host 'Checking system-wide JAVA_HOME.'
         $p = $global:SystemJavaHomeFacts.JavaHome
         # Check if we killed it.
         if ($p -and (Test-GotKilled $p)) {
             Write-Host -ForegroundColor Yellow 'Looks like the system-wide JAVA_HOME variable requires an update.'
-            $cand = Find-ReplacementJavaHome -PerUser $false
+            $cand = Find-ReplacementJavaHome -Facts $global:SystemJavaHomeFacts
 
             if ($cand) {
-                Write-Host "Setting the system-wide JAVA_HOME environment variable to ${cand}"
+                Write-Host -ForegroundColor Green "Set the system-wide JAVA_HOME environment variable to ${cand}"
                 [System.Environment]::SetEnvironmentVariable('JAVA_HOME', $cand, [System.EnvironmentVariableTarget]::Machine)
-            } else {
+            }
+            else {
                 Write-Host -ForegroundColor Red "Unexpected! Could not find a suitable replacment for JAVA_HOME pointing to '${p}'!"
             }
-        } else {
+        }
+        else {
             Write-Host -ForegroundColor Green 'Looks like no change is required.'
         }
         Write-Host ''
     }
 
     if ($global:UserJavaHomeFacts) {
-        Write-Host '‣ Checking per-user JAVA_HOME.'
+        Write-Host 'Checking per-user JAVA_HOME.'
         $p = $global:UserJavaHomeFacts.JavaHome
         # Check if we killed it.
         if ($p -and (Test-GotKilled $p)) {
             Write-Host -ForegroundColor Yellow 'Looks like the per-user JAVA_HOME variable requires an update.'
-            $cand = Find-ReplacementJavaHome -PerUser $true
+            $cand = Find-ReplacementJavaHome -Facts $global:UserJavaHomeFacts
 
             if ($cand) {
-                Write-Host "Setting the per-user JAVA_HOME environment variable to ${cand}"
+                Write-Host -ForegroundColor Green "Set the per-user JAVA_HOME environment variable to ${cand}"
                 [System.Environment]::SetEnvironmentVariable('JAVA_HOME', $cand, [System.EnvironmentVariableTarget]::User)
-            } else {
+            }
+            else {
                 Write-Host -ForegroundColor Red 'Unexpected! Could not find a suitable replacment for JAVA_HOME!'
                 Write-Host -ForegroundColor Red "It used to point to ${p}"
             }
-        } else {
+        }
+        else {
             Write-Host -ForegroundColor Green 'Looks like no change is required.'
         }
         Write-Host ''
@@ -1121,7 +1223,74 @@ function _postFixJavaHome {
 }
 
 function _postFixPath {
-    Write-Host "TODO!"
+    Write-Subtitle 'PATH' 'Checking if it needs updating'
+
+    $fstPathEntry = $null
+    $sndPathEntry = $null
+    if ($global:DefaultJavaFacts) {
+        Write-Debug "Got default Java facts. It was $($global:DefaultJavaFacts | Convert-JavaFacts) located at $($global:DefaultJavaFacts.JavaHome)"
+        $jh = $global:DefaultJavaFacts.JavaHome
+        if ($jh -and (Test-GotKilled $jh)) {
+            Write-Debug "I believe that we nuked the path..."
+            # Seems so. Well, okay. Let's see if we can find a suitable replacement.
+            $candRuntime = Find-ReplacementJavaHome $global:DefaultJavaFacts
+            Write-Debug "Found candRuntime to be ${candRuntime}"
+            if ($candRuntime) {
+                $fstPathEntry = [System.IO.Path]::Combine($candRuntime, 'bin')
+            }
+        }
+    }
+
+    if ($global:DefaultJavaCompilerFacts) {
+        Write-Debug "Got default Java Compiler facts. It was the compiler for Java $($global:DefaultJavaCompilerFacts.Feature) ($($global:DefaultJavaCompilerFacts.Arch))  located at $($global:DefaultJavaCompilerFacts.CompilerPath)"
+        $cPath = $global:DefaultJavaCompilerFacts.CompilerPath
+        if ($cPath -and (Test-CompilerGotKilled $cPath)) {
+            Write-Debug "I believe that we nuked the path..."
+            $candCompiler = Find-ReplacementJavaHome $global:DefaultJavaCompilerFacts
+            Write-Debug "Found candCompiler to be ${candComiler}"
+            if ($candCompiler) {
+                $sndPathEntry = [System.IO.Path]::Combine($candCompiler, 'bin')
+            }
+        }
+    }
+
+    if ($fstPathEntry -and $sndPathEntry -and $fstPathEntry -eq $sndPathEntry) {
+        $sndPathEntry = $null
+    }
+
+    if ($fstPathEntry) {
+        $newPath = $fstPathEntry
+        if ($sndPathEntry) {
+            $newPath += ";${sndPathEntry}"
+        }
+
+        $curPath = [System.Environment]::GetEnvironmentVariable('Path', [System.EnvironmentVariableTarget]::Machine)
+
+        foreach ($entry in $curPath.Split(';')) {
+            # Path::Combine() never appends a trailing backslash, thus...
+            if ($entry.EndsWith('\')) {
+                $entry = $entry.TrimEnd('\')
+            }
+
+            if ($entry -eq $fstPathEntry -or ($sndPathEntry -and $entry -eq $sndPathEntry) -or (Test-GotKilled $entry) -or (Test-CompilerGotKilled $entry)) {
+                Write-Debug "Skipping ${entry}"
+                continue
+            }
+            else {
+                Write-Debug "Appending ${entry}"
+                $newPath += ";${entry}"
+            }
+        }
+
+        Write-Host "Updating PATH such that the appropriate OpenJDK Java installation(s) appear(s) first."
+        Write-Debug "New PATH:`r`n  ${newPath}"
+        [System.Environment]::SetEnvironmentVariable('Path', $newPath, [System.EnvironmentVariableTarget]::Machine)
+        Write-Host -ForegroundColor Green "And that's done too! You should be good!"
+    }
+    else {
+        Write-Host -ForegroundColor Green "Looks like PATH doesn't require any changes."
+    }
+
 }
 
 function _postCleanup {
@@ -1136,82 +1305,20 @@ function Test-CanConnect {
 }
 #endregion
 
-
 try {
-    $tdir = New-TempDir
     _prechecks
+    $global:DownloadDir = New-TempDir
     _dealWithJRE
     _dealWithJDKs
     _postCleanup
 }
 finally {
-    Write-Host 'Cleaning up!'
-    if ($tdir) {
-        Remove-Item -Recurse -Force $tdir
+    if ($global:DownloadDir) {
+        Remove-Item -Recurse -Force $global:DownloadDir
     }
 }
 
-#$o, $oj = Get-JavaInstallations
-
-#$oj | fl *
-#$o | fl *
-
-#$tdir = New-TempDir
-#$msi = Get-TemurinInstaller -FeatureVersion 11 -TmpDir $tdir
-#Install-Temurin -MsiInstaller $msi
-
-# Get-JavaVersion 'java.exe' | Get-JavaFeatureVersion
-#$installs = Get-InstalledSoftware | Where-Object { $_.AppVendor -and $_.AppVendor.StartsWith('Oracle') -and $_.InstallLocation }
-#$installs | fl *
-
-#foreach ($install in $installs) {
-#    $path = "$($install.InstallLocation)bin\java.exe"
-#    Write-Host "Path is: $path"
-#    Write-Host "Is JDK? $($install | Test-IsJDK)"
-#    Write-Host "Full version is $(Get-JavaVersion $path)"
-#    Write-Host "Feature version is $(Get-JavaVersion $path | Get-JavaFeatureVersion)"
-#    if (Test-IsJDK $install.InstallLocation) {
-#        $comp = "$($install.InstallLocation)bin\javac.exe"
-#        Write-Host "Compiler version is $(Get-JavaVersion $comp)"
-#    }
-#}
-
-# $prop, $open = Get-JavaInstallations
-
-# foreach ($install in $prop) {
-#     $path = "$($install.InstallLocation)bin\java.exe"
-#     Write-Host "Oracle Java"
-#     Write-Host "Path is: $path"
-#     Write-Host "Is JDK? $($install | Test-IsJDK)"
-#     Write-Host "Full version is $(Get-JavaVersion $path)"
-#     Write-Host "Feature version is $(Get-JavaVersion $path | Get-JavaFeatureVersion)"
-#     if (Test-IsJDK $install.InstallLocation) {
-#         $comp = "$($install.InstallLocation)bin\javac.exe"
-#         Write-Host "Compiler version is $(Get-JavaVersion $comp)"
-#     }
-# }
-
-# foreach ($install in $open) {
-#     if ($install.InstallLocation) {
-#         # Anoyingly, Corretto doesn't register the install location.
-#         $path = "$($install.InstallLocation)bin\java.exe"
-#         Write-Host "OpenJDK Java"
-#         Write-Host "Path is: $path"
-#         Write-Host "Is JDK? $($install | Test-IsJDK)"
-#         Write-Host "Full version is $(Get-JavaVersion $path)"
-#         Write-Host "Feature version is $(Get-JavaVersion $path | Get-JavaFeatureVersion)"
-#         if (Test-IsJDK $install.InstallLocation) {
-#             $comp = "$($install.InstallLocation)bin\javac.exe"
-#             Write-Host "Compiler version is $(Get-JavaVersion $comp)"
-#         }   
-#     } else {
-#         Write-Host "Amazon Corretto"
-#         Write-Host "Path is not known..."
-#         Write-Host "Is JDK? Likely..."
-#         Write-Host "Full version is $($install.AppVersion)"
-#         Write-Host "Feature version is $($install.AppVersion | Get-JavaFeatureVersion)"
-#     }
-# }
-
-
+if (-not $global:Elevated) {
+    Read-Host -Prompt "`r`nWe are done. Press <Return> to close this window"
+}
 
