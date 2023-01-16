@@ -311,6 +311,36 @@ function Get-JavaFeatureVersion {
     }
 }
 
+function Get-JavaUpdateVersion {
+    Param(
+        [string] $FullVersion
+    )
+
+    # only a thing for Java 8
+    if ($FullVersion.StartsWith('1.') -and $FullVersion.Contains('_')) {
+        [int] $FullVersion.Split('_')[1]
+    } else {
+        0
+    }
+}
+
+function Test-IsNewLic {
+    Param(
+        [string] $FullVersion
+    )
+
+    $featureVersion = Get-JavaFeatureVersion $FullVersion
+
+    if ($featureVersion -eq 8) {
+        $update = Get-JavaUpdateVersion $FullVersion
+        return $update -gt 202
+    } elseif ($featureVersion -lt 8) {
+        return $false
+    }
+
+    return $true
+}
+
 function Get-JavaVendor {
     Param(
         [string] $Exe
@@ -508,6 +538,7 @@ function Write-AncientVersionWarning {
     )
 
     Write-Host -ForegroundColor Yellow @"
+
 It looks like you have Oracle Java 6 or older installed. Note that this Java version is very old, is no longer
 supported, and hasn't received any updates in years. Unless you have it on your machine for specific reasons
 (e.g. to run a piece of legacy software) it is highly recommended to switch to a supported version of Java. 
@@ -559,6 +590,18 @@ Java might get switched to Temurin if it was Corretto before.
 
 If you like your Corretto, then I suggest to stop now. If on the other hand, you think that Temurin is cool too
 (or you don't care) you may safely continue.
+"@
+}
+
+function Write-OracleLicenseWarning {
+    Write-Host -ForegroundColor Yellow @"
+As of April 16, 2019, Oracle has changed the license under which Java is released. Under the new conditions certain
+uses, such as personal use and development use are still allowed at no cost, yet other uses authorized under the prior
+license terms are no longer free.
+
+It is highly recommended that you replace this version of Java with Eclipse Temurin, particularly if you use it in a
+commercial setting.
+
 "@
 }
 
@@ -775,10 +818,13 @@ function _dealWithJDKs {
         $replace = $false
         Write-Host -NoNewline -ForegroundColor Yellow "Found $($facts | Convert-JavaFacts)"
         if ($facts.Feature -lt 7) {
-            Write-Host -ForegroundColor Red ' (ancient version!)'
+            Write-Host -ForegroundColor Red ' (ancient version)!'
         }
         elseif ($facts.Feature -lt 8) {
-            Write-Host -ForegroundColor Yellow ' (deprecated version!)'
+            Write-Host -ForegroundColor Yellow ' (deprecated version)!'
+        }
+        elseif (Test-IsNewLic $facts.Version) {
+            Write-Host -ForegroundColor Red ' (new license)!'
         }
         else {
             Write-Host -ForegroundColor Yellow '!'
@@ -798,6 +844,8 @@ function _dealWithJDKs {
             }
             elseif ($facts.Feature -lt 8) {
                 Write-DeprecatedVersionInfo
+            } elseif (Test-IsNewLic $facts.Version) {
+                Write-OracleLicenseWarning
             }
             $replace = Receive-Answer $q
         }
@@ -883,10 +931,13 @@ function _dealWithJRE {
         Write-Host -NoNewline -ForegroundColor Yellow "Found $($facts | Convert-JavaFacts)"
 
         if ($facts.Feature -lt 7) {
-            Write-Host -ForegroundColor Red ' (ancient version!)'
+            Write-Host -ForegroundColor Red ' (ancient version)!'
         }
         elseif ($facts.Feature -lt 8) {
-            Write-Host -ForegroundColor Yellow ' (deprecated version!)'
+            Write-Host -ForegroundColor Yellow ' (deprecated version)!'
+        }
+        elseif (Test-IsNewLic $facts.Version) {
+            Write-Host -ForegroundColor Red ' (new license)!'
         }
         else {
             Write-Host -ForegroundColor Yellow '!'
@@ -901,6 +952,8 @@ function _dealWithJRE {
             }
             elseif ($facts.Feature -lt 8) {
                 Write-DeprecatedVersionInfo
+            } elseif (Test-IsNewLic $facts.Version) {
+                Write-OracleLicenseWarning
             }
             $replace = Receive-Answer $q
         }
