@@ -256,7 +256,9 @@ function Restart-HostElevated {
     $psExeArgs = @( '-File'; "`"${PSCommandPath}`"")
     $params = @{ FilePath = $proc.Path; Verb = 'RunAs'; ArgumentList = $psExeArgs }
 
-    Start-Process @params
+    Write-Host 'Waiting for admin shell to exit...'
+    Start-Process -Wait @params
+    _postRefreshPath
     exit
 }
 #endregion
@@ -319,7 +321,8 @@ function Get-JavaUpdateVersion {
     # only a thing for Java 8
     if ($FullVersion.StartsWith('1.') -and $FullVersion.Contains('_')) {
         [int] $FullVersion.Split('_')[1]
-    } else {
+    }
+    else {
         0
     }
 }
@@ -334,7 +337,8 @@ function Test-IsNewLic {
     if ($featureVersion -eq 8) {
         $update = Get-JavaUpdateVersion $FullVersion
         return $update -gt 202
-    } elseif ($featureVersion -lt 8) {
+    }
+    elseif ($featureVersion -lt 8) {
         return $false
     }
 
@@ -565,8 +569,8 @@ function Write-JREInfo {
 It seems that you have at least one version of Oracle JRE installed. Apart from the JVM, Oracle's JRE ships with two
 components that never have been open-sourced:
 
-  • support for Java applets (run Java applications inside a browser)
-  • support for Java Web Start (start Java applications from within a browser)
+  - support for Java applets (run Java applications inside a browser)
+  - support for Java Web Start (start Java applications from within a browser)
 
 As Temurin JRE cannot include these proprietary extensions, it is not a 1:1 replacement for Oracle. That said, Java
 applets are deprecated for a long time and it is unlikely that you still need this functionality.
@@ -844,7 +848,8 @@ function _dealWithJDKs {
             }
             elseif ($facts.Feature -lt 8) {
                 Write-DeprecatedVersionInfo
-            } elseif (Test-IsNewLic $facts.Version) {
+            }
+            elseif (Test-IsNewLic $facts.Version) {
                 Write-OracleLicenseWarning
             }
             $replace = Receive-Answer $q
@@ -952,7 +957,8 @@ function _dealWithJRE {
             }
             elseif ($facts.Feature -lt 8) {
                 Write-DeprecatedVersionInfo
-            } elseif (Test-IsNewLic $facts.Version) {
+            }
+            elseif (Test-IsNewLic $facts.Version) {
                 Write-OracleLicenseWarning
             }
             $replace = Receive-Answer $q
@@ -1307,6 +1313,18 @@ function _postFixJavaHome {
     }
 }
 
+function _postRefreshPath {
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+    if (-not ("Win32.NativeMethods" -as [Type])) {
+        Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+"@
+    }
+
+    [Win32.Nativemethods]::SendMessageTimeout([IntPtr] 0xffff, 0x1a, [UIntPtr]::Zero, "Environment", 2, 5000, [ref][UIntPtr]::Zero) | Out-Null
+}
+
 function _postFixPath {
     Write-Subtitle 'PATH' 'Checking if it needs updating'
 
@@ -1315,7 +1333,8 @@ function _postFixPath {
     if ($global:DefaultJavaFacts) {
         Write-Debug "Got default Java facts. It was $($global:DefaultJavaFacts | Convert-JavaFacts) located at $($global:DefaultJavaFacts.JavaHome)"
         $jh = $global:DefaultJavaFacts.JavaHome
-        if ($jh -and (Test-GotKilled $jh)) {
+        $killed = Test-GotKilled $jh
+        if ($jh -and $killed) {
             Write-Debug "I believe that we nuked the path..."
             # Seems so. Well, okay. Let's see if we can find a suitable replacement.
             $candRuntime = Find-ReplacementJavaHome $global:DefaultJavaFacts
@@ -1323,13 +1342,17 @@ function _postFixPath {
             if ($candRuntime) {
                 $fstPathEntry = [System.IO.Path]::Combine($candRuntime, 'bin')
             }
+        } elseif($jh -and -not $killed) {
+            # Make sure the entry remains the first on the path
+            $fstPathEntry = [System.IO.Path]::Combine($jh, 'bin')
         }
     }
 
     if ($global:DefaultJavaCompilerFacts) {
         Write-Debug "Got default Java Compiler facts. It was the compiler for Java $($global:DefaultJavaCompilerFacts.Feature) ($($global:DefaultJavaCompilerFacts.Arch))  located at $($global:DefaultJavaCompilerFacts.CompilerPath)"
         $cPath = $global:DefaultJavaCompilerFacts.CompilerPath
-        if ($cPath -and (Test-CompilerGotKilled $cPath)) {
+        $killedCompiler = Test-CompilerGotKilled $cPath
+        if ($cPath -and $killedCompiler) {
             Write-Debug "I believe that we nuked the path..."
             $candCompiler = Find-ReplacementJavaHome $global:DefaultJavaCompilerFacts
             Write-Debug "Found candCompiler to be ${candComiler}"
@@ -1370,6 +1393,7 @@ function _postFixPath {
         Write-Host "Updating PATH such that the appropriate OpenJDK Java installation(s) appear(s) first."
         Write-Debug "New PATH:`r`n  ${newPath}"
         [System.Environment]::SetEnvironmentVariable('Path', $newPath, [System.EnvironmentVariableTarget]::Machine)
+
         Write-Host -ForegroundColor Green "And that's done too! You should be good!"
     }
     else {
@@ -1400,6 +1424,8 @@ finally {
 }
 
 if (-not $global:Elevated) {
-    Read-Host -Prompt "`r`nWe are done. Press <Return> to close this window"
+    Write-Debug "global:Elevated was ${global:Elevated}"
+    _postRefreshPath
+    Read-Host -Prompt "`r`nWe are done. Press <Return> to terminate this script"
 }
 #endregion
