@@ -196,6 +196,26 @@ get_java_feature_version() {
     fi
 }
 
+is_new_lic() {
+    local full_version=$1
+    local feature_version
+    local update
+    feature_version=$(get_java_feature_version "$full_version")
+
+    if [ "$feature_version" -gt 8 ]; then
+        true
+    elif [ "$feature_version" -lt 8 ]; then
+        false
+    else
+        update=$(echo "$full_version" | cut -d '_' -f 2)
+        if [ "$update" -gt 202 ]; then
+            true
+        else
+            false
+        fi
+    fi
+}
+
 check_java_home() {
     local path
     path=$1
@@ -388,6 +408,16 @@ ancient_version_info() {
     echo ''
 }
 
+new_lic_info() {
+    echo "${cy}As of April 16, 2019, Oracle has changed the license under which Java is released."
+    echo "Under the new conditions certain uses, such as personal use and development use are still"
+    echo "allowed at no cost, yet other uses authorized under the prior license terms are ${b}no longer free.${n}"
+    echo ""
+    echo "${cy}It is highly recommended that you replace this version of Java with Eclipse Temurin, particularly"
+    echo "if you use it in a commercial setting.${n}"
+    echo ''
+}
+
 deal_with_jre() {
     local jre_bin
     local full_version
@@ -401,13 +431,17 @@ deal_with_jre() {
         full_version=$(get_java_version "$jre_bin")
         feature_version=$(get_java_feature_version "$full_version")
         # shellcheck disable=SC2059
-        printf "${cy}Found ${b}Oracle JRE ${feature_version} (${full_version})${n}${cy}!${n}"
+        printf "${cy}Found ${b}Oracle JRE ${feature_version} (${full_version})${n}"
 
         if [ "$feature_version" -lt 8 ]; then
             # shellcheck disable=SC2059
-            printf "${cy} (deprecated version!)${n}\n\n"
+            printf "${cy} (deprecated version)!${n}\n\n"
+        elif is_new_lic "$full_version"; then
+            # shellcheck disable=SC2059
+            printf "${cr} (new license)!${n}\n\n"
         else
-            printf '\n\n'
+            # shellcheck disable=SC2059
+            printf "${cy}!${n}\n\n"
         fi
 
         local replace_it='?'
@@ -423,6 +457,9 @@ deal_with_jre() {
             if [ "$feature_version" -lt 8 ]; then
                 printf 'Further: '
                 deprecated_version_info
+            elif is_new_lic "$full_version"; then
+                printf 'Important: '
+                new_lic_info
             fi
 
             if ask_user 'Do you want to replace Oracle JRE with Temurin JRE?'; then
@@ -529,12 +566,14 @@ deal_with_jdks() {
             full_ver=$(get_java_version "$oj")
             major_ver=$(get_java_feature_version "$full_ver")
             # shellcheck disable=SC2059
-            printf "‣ Found ${b}Oracle JDK $major_ver ($full_ver)${n}."
+            printf "‣ Found ${b}Oracle JDK $major_ver ($full_ver)${n}"
 
             if [ "$major_ver" -lt 8 ]; then
-                echo "${cy} (deprecated version!)${n}"
+                echo "${cy} (deprecated version)!${n}"
+            elif is_new_lic "$full_ver"; then
+                echo "${cr} (new license)!${n}"
             else
-                printf '\n'
+                echo '!'
             fi
 
             for openjdk_major in "${openjdk_feature_versions[@]}"; do
@@ -548,7 +587,7 @@ deal_with_jdks() {
             done
 
             if [ "$replace" = 'yes' ]; then
-                if [ "$major_ver" -lt 8 ]; then
+                if [ "$major_ver" -lt 8 ] || is_new_lic "$full_ver"; then
                     local response
                     ask_user_info "Do you want to replace Oracle JDK ${major_ver} with Temurin JDK 8?"; response=$?
 
@@ -556,7 +595,12 @@ deal_with_jdks() {
                         to_replace+=("$oj")
                     elif [ "$response" -eq 2 ]; then
                         echo ''
-                        deprecated_version_info
+                        if [ "$major_ver" -lt 8 ]; then
+                            deprecated_version_info
+                        else
+                            new_lic_info
+                        fi
+
                         if ask_user "Do you want to replace Oracle JDK ${major_ver} with Temurin OpenJDK 8?"; then
                             to_replace+=("$oj")
                         fi
