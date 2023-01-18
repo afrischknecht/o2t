@@ -835,7 +835,7 @@ function _dealWithJDKs {
         }
         $q = "Do you want to replace Oracle JDK $($facts.Feature)?"
 
-        if ($facts.Feature -lt 8) {
+        if ($facts.Feature -lt 8 -or (Test-IsNewLic $facts.Version)) {
             $resp = Receive-AnswerInfo $q
         }
         else {
