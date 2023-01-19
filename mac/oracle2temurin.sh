@@ -46,7 +46,7 @@ ask_user() {
 
     while [ -z "$answer" ]; do
         echo -n "$question [y/n] "
-        read -r -s -n 1 answer
+        read -r -s -n 1 answer < /dev/tty
         echo "$answer"
         if [[ "$answer" != 'y' && "$answer" != 'n' ]]; then
             echo "Please answer with either 'y' or 'n'!"
@@ -68,7 +68,7 @@ ask_user_info() {
 
     while [ -z "$answer" ]; do
         echo -n "$question [y/n] (or [i] if you need more info) "
-        read -r -s -n 1 answer
+        read -r -s -n 1 answer < /dev/tty
         echo "$answer"
         if [[ "$answer" != 'y' && "$answer" != 'n' && "$answer" != 'i' ]]; then
             echo "Please answer with either 'y', 'n', or 'i'!"
