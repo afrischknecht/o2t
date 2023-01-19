@@ -589,7 +589,7 @@ deal_with_jdks() {
             if [ "$replace" = 'yes' ]; then
                 if [ "$major_ver" -lt 8 ] || is_new_lic "$full_ver"; then
                     local response
-                    ask_user_info "Do you want to replace Oracle JDK ${major_ver} with Temurin JDK 8?"; response=$?
+                    ask_user_info "Do you want to replace Oracle JDK ${major_ver} with Temurin OpenJDK ${major_ver}?"; response=$?
 
                     if [ "$response" -eq 0 ]; then
                         to_replace+=("$oj")
@@ -601,7 +601,7 @@ deal_with_jdks() {
                             new_lic_info
                         fi
 
-                        if ask_user "Do you want to replace Oracle JDK ${major_ver} with Temurin OpenJDK 8?"; then
+                        if ask_user "Do you want to replace Oracle JDK ${major_ver} with Temurin OpenJDK ${major_ver}?"; then
                             to_replace+=("$oj")
                         fi
                     fi
