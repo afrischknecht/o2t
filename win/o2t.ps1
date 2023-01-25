@@ -253,7 +253,8 @@ function Test-IsInLocalAdmins {
 
 function Restart-HostElevated {
     $proc = Get-Process -Id $PID
-    $psExeArgs = @( '-File'; "`"${PSCommandPath}`"")
+    $ep = Get-ExecutionPolicy
+    $psExeArgs = @( '-ExecutionPolicy'; $ep; '-File'; "`"${PSCommandPath}`"")
     $params = @{ FilePath = $proc.Path; Verb = 'RunAs'; ArgumentList = $psExeArgs }
 
     Write-Host 'Waiting for admin shell to exit...'
