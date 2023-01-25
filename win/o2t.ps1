@@ -1026,7 +1026,7 @@ function _precheckPSVersion {
     if ($PSVersionTable.PSVersion.Major -lt 5) {
         Write-Host -ForegroundColor Red "This script requires at least PowerShell version 5 to run, but this is version $($PSVersionTable.PSVersion.Major)!"
         Write-Host 'Exiting.'
-        exit
+        _precheckEarlyExit
     }
     else {
         Write-Host -ForegroundColor Green "All good. Looks like this is PowerShell version $($PSVersionTable.PSVersion.Major)!"
@@ -1093,7 +1093,7 @@ installed, you may re-run this script.
 
 Bye for now!
 "@
-        exit
+        _precheckEarlyExit
     }
 }
 
@@ -1115,7 +1115,7 @@ function _precheckDefaultJava {
         if ($global:DefaultJavaFacts.Feature -lt 7) {
             # TODO: Right decision? We could probably continue...
             Write-AncientVersionWarning 'execution of this script will now stop'
-            Exit
+            _precheckEarlyExit
         }
         
     }
@@ -1162,7 +1162,7 @@ proceed. Please verify that your machine is connected to the Internet and that $
 "@
         Write-Host ''
         Write-Host 'Exiting now!'
-        exit
+        _precheckEarlyExit
     }
 }
 
@@ -1183,6 +1183,11 @@ function _precheckCorretto {
         Write-Host -ForegroundColor Green 'No Corretto installations found.'
     }
     Write-Host ''
+}
+
+function _precheckEarlyExit() {
+    Read-Host 'Press <Return> to terminate script execution'
+    exit
 }
 
 function _prechecks {
