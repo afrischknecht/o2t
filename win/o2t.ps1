@@ -253,7 +253,8 @@ function Test-IsInLocalAdmins {
 
 function Restart-HostElevated {
     $proc = Get-Process -Id $PID
-    $psExeArgs = @( '-File'; "`"${PSCommandPath}`"")
+    $ep = Get-ExecutionPolicy
+    $psExeArgs = @( '-ExecutionPolicy'; $ep; '-File'; "`"${PSCommandPath}`"")
     $params = @{ FilePath = $proc.Path; Verb = 'RunAs'; ArgumentList = $psExeArgs }
 
     Write-Host 'Waiting for admin shell to exit...'
@@ -1025,7 +1026,7 @@ function _precheckPSVersion {
     if ($PSVersionTable.PSVersion.Major -lt 5) {
         Write-Host -ForegroundColor Red "This script requires at least PowerShell version 5 to run, but this is version $($PSVersionTable.PSVersion.Major)!"
         Write-Host 'Exiting.'
-        exit
+        _precheckEarlyExit
     }
     else {
         Write-Host -ForegroundColor Green "All good. Looks like this is PowerShell version $($PSVersionTable.PSVersion.Major)!"
@@ -1092,7 +1093,7 @@ installed, you may re-run this script.
 
 Bye for now!
 "@
-        exit
+        _precheckEarlyExit
     }
 }
 
@@ -1114,7 +1115,7 @@ function _precheckDefaultJava {
         if ($global:DefaultJavaFacts.Feature -lt 7) {
             # TODO: Right decision? We could probably continue...
             Write-AncientVersionWarning 'execution of this script will now stop'
-            Exit
+            _precheckEarlyExit
         }
         
     }
@@ -1161,7 +1162,7 @@ proceed. Please verify that your machine is connected to the Internet and that $
 "@
         Write-Host ''
         Write-Host 'Exiting now!'
-        exit
+        _precheckEarlyExit
     }
 }
 
@@ -1182,6 +1183,11 @@ function _precheckCorretto {
         Write-Host -ForegroundColor Green 'No Corretto installations found.'
     }
     Write-Host ''
+}
+
+function _precheckEarlyExit() {
+    Read-Host 'Press <Return> to terminate script execution'
+    exit
 }
 
 function _prechecks {
@@ -1432,8 +1438,8 @@ if (-not $global:Elevated) {
 # SIG # Begin signature block
 # MIImmwYJKoZIhvcNAQcCoIImjDCCJogCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUQASG1Y09vjf8scJH1lBbBKFV
-# Ur6ggiACMIIFyTCCBLGgAwIBAgIQG7WPJSrfIwBJKMmuPX7tJzANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUlGcq9nGqPsk9MG7TqbdtrO+U
+# HyyggiACMIIFyTCCBLGgAwIBAgIQG7WPJSrfIwBJKMmuPX7tJzANBgkqhkiG9w0B
 # AQwFADB+MQswCQYDVQQGEwJQTDEiMCAGA1UEChMZVW5pemV0byBUZWNobm9sb2dp
 # ZXMgUy5BLjEnMCUGA1UECxMeQ2VydHVtIENlcnRpZmljYXRpb24gQXV0aG9yaXR5
 # MSIwIAYDVQQDExlDZXJ0dW0gVHJ1c3RlZCBOZXR3b3JrIENBMB4XDTIxMDUzMTA2
@@ -1608,32 +1614,32 @@ if (-not $global:Elevated) {
 # cmkxGDAWBgNVBAMTD0VzcmkgSXNzdWluZyBDQQITTwADMPYysoljL8pcBQAAAAMw
 # 9jAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZBgkqhkiG
 # 9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYBBAGCNwIB
-# FTAjBgkqhkiG9w0BCQQxFgQUbyvjcR8QQEssZf6Fy+4fG956HUwwDQYJKoZIhvcN
-# AQEBBQAEggEAf11JvsRlFOXAi7Wr7C6HmgDIly44cr19SxExYPsolr4XhwrxvHsW
-# az1taxgnKI5V4Cvyo0x5CB8KONxlNrPd4ztWWN/0aRyvcRI+uUMlFcmKOB1BCCfa
-# WRix923bxkB/ADdduakTd8SzHSZ4nBCHN1qjdppG7yV2DxqQroY8hJKeCxgqKJj2
-# 9XNWPP+bHKsOEZIGoGQqA4BqH5f2gRvL7RVtr2o1f3cBQBU0LTnnZTwDZJiQOhyY
-# ilOosH9JjHD+TG19P/L3I+yzNrDmSKKQrw0jbrG8VHpi6/A4HOBJrfAPuzIsHUvO
-# hHnoPL7aciKfDF0HToUQoCeGBDMruUIDEKGCBAIwggP+BgkqhkiG9w0BCQYxggPv
+# FTAjBgkqhkiG9w0BCQQxFgQUxoTmBT1zS+2M3ziU8CaCf8XnSTowDQYJKoZIhvcN
+# AQEBBQAEggEAB9KRs/LAGU9WdalMK4Y71orlFAB6NvuNEbEqmIrX1pozl9AwEt5j
+# NeNH2Mqcmg05N2yH7mnyglB/aFpmHE+0rJXhMLbRaTmW58sedu4lKRNmoVA7Z6Gf
+# wANUawuc+E1cHsC+R7ozpISmJLjn3b6yvP228iTWSE3u8/jdGkCYk3mb8Q9K1rpo
+# f3jw6Ddpp2TbwW6p2ucQllrSa0dUgjwZ4mmjrbxI+WyO0XNeSiqyBr5gg3b3dmlT
+# VgjAc160yolRy2N9hQi337pdmYB3A9gx8H4agukSgdq+yY4pzCTxgjKeoCv6Nq1v
+# SRp4hL7+qR7R6GigLsg48MiKpnjpqZId9KGCBAIwggP+BgkqhkiG9w0BCQYxggPv
 # MIID6wIBATBqMFYxCzAJBgNVBAYTAlBMMSEwHwYDVQQKExhBc3NlY28gRGF0YSBT
 # eXN0ZW1zIFMuQS4xJDAiBgNVBAMTG0NlcnR1bSBUaW1lc3RhbXBpbmcgMjAyMSBD
 # QQIQK9SucLnQY1sq6YTI1nSqMDANBglghkgBZQMEAgIFAKCCAVYwGgYJKoZIhvcN
-# AQkDMQ0GCyqGSIb3DQEJEAEEMBwGCSqGSIb3DQEJBTEPFw0yMzAxMTgxMzU0MjFa
+# AQkDMQ0GCyqGSIb3DQEJEAEEMBwGCSqGSIb3DQEJBTEPFw0yMzAxMjUwMDIzMjBa
 # MDcGCyqGSIb3DQEJEAIvMSgwJjAkMCIEIAO5mmRJdJhKlbbMXYDTRNB0+972yiQE
-# hCvmzw5EIgeKMD8GCSqGSIb3DQEJBDEyBDDA/L7nW/qBeWuCiydMoYxn1nqnxl2L
-# sCgWTUV32eTMMV4zE79sczTv1PXmd2Zl9JUwgZ8GCyqGSIb3DQEJEAIMMYGPMIGM
+# hCvmzw5EIgeKMD8GCSqGSIb3DQEJBDEyBDBe0uS9hM9R2uQf6jeFvIEjgQna6/X8
+# LKZ/7o3RQJvI6C+AVL0EG5T7uIsWBTKcS8swgZ8GCyqGSIb3DQEJEAIMMYGPMIGM
 # MIGJMIGGBBS/T2vEmC3eFQWo78jHp51NFDUAzjBuMFqkWDBWMQswCQYDVQQGEwJQ
 # TDEhMB8GA1UEChMYQXNzZWNvIERhdGEgU3lzdGVtcyBTLkEuMSQwIgYDVQQDExtD
 # ZXJ0dW0gVGltZXN0YW1waW5nIDIwMjEgQ0ECECvUrnC50GNbKumEyNZ0qjAwDQYJ
-# KoZIhvcNAQEBBQAEggIAFSchZhaDK33nbzz3K/FngOGEVGwQnXF/E6TOp5Z8NBnF
-# 2VxaN0O296S5hRovxUl90qQlaQ2TU61iw5JtBZAdk/5EHvL+0HPR2dRpQx2N0yoQ
-# xtnNzeQLPblJ0gC5xjri+stEOWBPLOYccmvHshlb+WrWYDzfK8RsrnFOlGO2i/66
-# xsaR/oWLMBZgLzB3ikx2h8txqnY8yXUQcHsD1w5AR3dSf1FZCz8RKkWEtjCgYSnI
-# 4N6Gzq0ociRNPxzLbimVsuJcYVDbWpKiN/PnJNGGE6WrxvO7z+EZjTBKPNCQOV7R
-# B+nKv+V3IfV9Om/sl8tcuaYxJslP9BGW2FZ3oSlxJaPcVj4Cs0SD7EOU1jrsWBFH
-# 193eppHRSPb4c0MgQA2Wyz8xrU3p7ISKWEBG2jY9beKYsC3JpqARCdoLxkmmKhPD
-# FmH0SeWRa07aubcU+/F4OLpnW97zHAGUgaaASSlu+QE5iAus+wwn1lSAd/pSZo8V
-# FHWI49JQa0rni7VOWiine0xvhIQvwkDTxHnktf/dnjPVb6SAvVJ8QvjkzlMUD1l/
-# GmLk5cKgU4nppsc5WHbreGCnvmWV8hTnDRnDlL2Xn0u1t8+PLKweIXVUvZ3eG06w
-# hUNFy/7TkL2BM6ihQ+bc/gTwAZDIzlI7eQ5ehbRclAdgEakjSF8eVzNnEkZjvm0=
+# KoZIhvcNAQEBBQAEggIAGNjUPvSmhUEAurzxcuD+JkMKE3oSob5V1kWZ4Jchjt8D
+# 2y49c0HRgfJZ8JdsKCn+Euixla3YQjH56Ro3AcOAJ6mcAuRFD+HI0+Gj+i+CLHrQ
+# Knk9dFVl1sUKlQjrLO/mvb6HTKnLYxzC8w+54Np+bg3tdOpLsWNEHSd/whV6IEc5
+# 5hjYRx6ykDmu4+/6WavH0TqoMs1b2+tvaSm8G4kPIW1vI54Uma01TCXwLJkK9c0V
+# RFCTHF+GNdfBT+skGMrw7/hOLbXdZ/sNq+WzoZ/zgnHJAWPEAkQ4VHRwD2kjhWCG
+# WIQgcauF2Q+6VvUBzOK9uK/8LBKNOqzK0/NFp7TKRLB7+dp/Ut+89KK7r421sdd5
+# UMjfPUuqGY8XE8nAXY4/fuEqWodlrWaT4v0m8ySIxSnORAT7Kz4a4Wi+AbYda9aI
+# TG3U+fPpXXnK1ZBgW6uS3byVn+GgcKb107A2/KBUgCXW8mT2s0MEl/4535lQ4w5N
+# N09tTPPzvc4yrs9P50gRkS+AFR4Twqabeb+m2ejxcP1y6hz+5xmRwYzN+FtuygUS
+# p/BAoCP0yWYXvADhAKEl9NDmY7qxm1kloBsJh/A56HUvbuk+5o4Tcs7nPFO85fq3
+# IXwvp/DpYb1bkDmnI43kXb55RDVqt2gt7z7vTh1XcdyWB+0E9+b7fNpAE49cdTk=
 # SIG # End signature block
